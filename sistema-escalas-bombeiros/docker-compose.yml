@@ -1,0 +1,46 @@
+# Desenvolvimento: Postgres + API.
+#
+# Redis e worker Celery NÃO estão aqui de propósito: o solve leva segundos e a
+# API usa BackgroundTasks + polling. Ver Parte 2, "Backend" — Celery entra
+# quando o solve passar de ~10s ou quando entrar envio de e-mail/push.
+
+services:
+  banco:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: escalas
+      POSTGRES_PASSWORD: escalas
+      POSTGRES_DB: escalas
+    # A porta do banco NÃO é publicada no host de propósito: a API fala com ele
+    # pela rede interna do Docker. Assim não há conflito com outro Postgres já
+    # rodando na máquina. Para inspecionar com pgAdmin ou DBeaver, descomente:
+    # ports: ["5433:5432"]
+    volumes:
+      - dados_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U escalas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://escalas:escalas@banco:5432/escalas
+      # Apenas para desenvolvimento. Em produção o JWT_SECRET é obrigatório e
+      # deve ser gerado — ver render.yaml e GUIA_DEPLOY.md.
+      JWT_SECRET: apenas-para-desenvolvimento-local
+      # Senha única para todas as contas do seed, para facilitar o teste local.
+      # Remova esta linha e o seed gera uma senha aleatória por usuário.
+      SENHA_INICIAL: bombeiros2026
+    ports: ["8000:8000"]
+    depends_on:
+      banco: {condition: service_healthy}
+    volumes:
+      - .:/app
+    command: >
+      sh -c "python -m api.seed &&
+             uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  dados_postgres:

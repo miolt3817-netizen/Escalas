@@ -1,0 +1,32 @@
+# Motor de otimização
+ortools>=9.11,<10
+
+# Backend
+fastapi>=0.115
+uvicorn[standard]>=0.32
+sqlalchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.2
+pydantic>=2.9
+
+# Autenticação
+python-jose[cryptography]>=3.3
+bcrypt>=4.2
+python-multipart>=0.0.12
+
+# Exportação
+openpyxl>=3.1
+weasyprint>=62   # servidor Linux/Docker
+reportlab>=4.2   # alternativa do aplicativo Windows (WeasyPrint exige GTK)
+
+# Aplicativo desktop
+pyinstaller>=6.10
+
+# Testes
+pytest>=8.3
+hypothesis>=6.112
+httpx>=0.27
+# Layout: renderiza as telas em navegador real. Instalar o Chromium com
+# `python -m playwright install chromium`. Sem ele os testes de layout são
+# pulados; o resto da suíte roda normalmente.
+playwright>=1.47
