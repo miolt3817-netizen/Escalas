@@ -1,0 +1,44 @@
+{
+  "name": "Escalas BM — Escalas de Bombeiros",
+  "short_name": "Escalas BM",
+  "description": "Geração e consulta de escalas de plantão do corpo de bombeiros.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f7f8",
+  "theme_color": "#1c1d20",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "categories": [
+    "productivity",
+    "business"
+  ],
+  "icons": [
+    {
+      "src": "/estatico/marca-192-v2.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/estatico/marca-512-v2.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/estatico/marca-192-mascara-v2.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/estatico/marca-512-mascara-v2.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "id": "/?app=escalas-bm"
+}

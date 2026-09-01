@@ -1,0 +1,31 @@
+# Blueprint do Render — cria a API e o banco de uma vez.
+#
+# Uso: painel do Render -> New -> Blueprint -> aponte para este repositório.
+#
+# Limites do plano gratuito, para não haver surpresa:
+#   * o banco Postgres gratuito EXPIRA 30 dias após a criação;
+#   * o serviço web hiberna após 15 min sem acesso e leva ~1 min para acordar;
+#   * o banco gratuito não tem backup de nenhum tipo.
+# Para uso além da avaliação, migrar para instâncias pagas.
+
+databases:
+  - name: escalas-banco
+    databaseName: escalas
+    user: escalas
+    plan: free
+
+services:
+  - type: web
+    name: escalas-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /saude
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: escalas-banco
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true      # o Render gera um segredo forte e único
+      - key: AMBIENTE
+        value: producao

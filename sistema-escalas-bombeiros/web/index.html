@@ -1,0 +1,3940 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Escalas BM — Escalas de Bombeiros</title>
+
+<!-- Aplicativo instalável: o navegador oferece "Instalar" e o ícone vai para
+     a tela inicial, abrindo em tela cheia. -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1c1d20">
+<link rel="icon" href="/estatico/favicon-v2.png" type="image/png">
+<!-- iOS ignora o manifest e usa estas tags. -->
+<link rel="apple-touch-icon" href="/estatico/marca-apple-v2.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Escalas BM">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="description" content="Geração e consulta de escalas de plantão do corpo de bombeiros.">
+<style>
+/* ---------------------------------------------------------------------------
+   Direção visual definida pela especificação (Parte 1, "Design"):
+   Google Calendar / Sheets / Notion — limpo, muito espaço em branco,
+   poucas cores. Azul = informação, verde = sucesso, amarelo = aviso,
+   vermelho = conflito.
+
+   Uma decisão: "vermelho" é ambíguo na spec — nomeia tanto CONFLITO quanto o
+   TIPO de escala. Resolvido assim: escala vermelha usa um tom suave de fundo
+   (é uma categoria, não um alerta); o vermelho saturado fica reservado para
+   conflitos de verdade.
+--------------------------------------------------------------------------- */
+:root{
+  /* Identidade Escalas BM. O vermelho da marca (#d8181b) e o carvão do
+     lockup foram amostrados do arquivo original.
+
+     Decisão de uso: o cabeçalho é CARVÃO, não vermelho. Fundo vermelho
+     inteiro cansa num sistema usado horas por dia, e o vermelho precisa
+     continuar significando três coisas distintas — marca, escala vermelha e
+     erro. Reservá-lo para acento mantém os três legíveis. A variante escura
+     já existe na identidade. */
+  --papel:#ffffff; --superficie:#f7f7f8; --superficie-2:#eeeef0;
+  --tinta:#1c1d20; --tinta-2:#5c5e63; --tinta-3:#8a8d93;
+  --borda:#dedee1; --borda-forte:#bcbec3;
+
+  --marca:#d8181b;           /* vermelho da marca */
+  --marca-escura:#a91114;    /* estados de pressão e ênfase */
+  --marca-suave:#fdecec;     /* fundo de tinta leve */
+  --carvao:#1c1d20;          /* cabeçalho e texto do lockup */
+  --carvao-2:#2a2c30;
+
+  /* Semânticas, escolhidas para não se confundirem com a marca. */
+  --verde:#137a3d; --verde-suave:#e6f4ea;
+  --amarelo:#b45309; --amarelo-suave:#fdf3e3;   /* laranja da chama */
+  --vermelho:#b3140f; --vermelho-suave:#fdecec; /* erro: mais profundo que a marca */
+  --destaque:#1c1d20;        /* "meu plantão": carvão, sem competir com o vermelho */
+  --hoje:#1a5fd0;            /* marcação do dia corrente */
+  --hoje-suave:#eef3fd;
+
+  --raio:8px;
+  --sombra:0 1px 2px rgba(28,29,32,.2),0 1px 3px 1px rgba(28,29,32,.12);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+/* Fontes do próprio sistema, sem CDN externa. Três motivos:
+   o aplicativo instalado precisa funcionar sem internet; cada carregamento
+   pela CDN enviaria o IP do usuário a um terceiro, o que é indefensável num
+   sistema com dado de saúde; e fonte local aparece instantaneamente, sem o
+   pisca-pisca de texto trocando de forma. */
+body{
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI Variable Text',
+    'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  background:var(--superficie); color:var(--tinta);
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:ui-monospace,'Cascadia Mono','Segoe UI Mono',SFMono-Regular,
+  Menlo,Consolas,monospace}
+button{font-family:inherit;font-size:14px;cursor:pointer;border-radius:var(--raio)}
+button:focus-visible,input:focus-visible,td[tabindex]:focus-visible{
+  outline:2px solid var(--marca); outline-offset:2px}
+
+/* ------------------------------------------------------- layout ------- */
+.quadro{display:block}
+.conteudo-principal{min-width:0}
+
+/* ---------------------------------------------------- barra superior --- */
+.lateral{background:var(--carvao);position:sticky;top:0;z-index:40;
+  display:flex;align-items:center;gap:20px;padding:0 22px;height:58px}
+.lateral-marca{display:flex;align-items:center;gap:9px;color:#fff;
+  font-weight:600;font-size:16px;letter-spacing:-.01em;white-space:nowrap}
+.lateral-marca .simbolo{width:28px;height:28px;border-radius:7px;
+  background:var(--marca);display:grid;place-items:center;flex:0 0 auto}
+.lateral-marca .simbolo svg{width:20px;height:20px;color:#fff;--vazado:var(--marca)}
+.fogo{color:var(--marca)}
+
+.lateral-menu{display:flex;gap:2px;flex:1;min-width:0;overflow-x:auto;
+  scrollbar-width:none}
+.lateral-menu::-webkit-scrollbar{display:none}
+.aba{display:flex;align-items:center;gap:8px;padding:8px 14px;border:none;
+  background:transparent;color:rgba(255,255,255,.7);font-weight:500;
+  font-size:14px;border-radius:var(--raio);white-space:nowrap;flex:0 0 auto}
+.aba:hover{background:rgba(255,255,255,.08);color:#fff}
+.aba.ativa{background:rgba(255,255,255,.14);color:#fff;font-weight:600}
+.icone-menu{width:17px;height:17px;flex:0 0 auto;display:grid;place-items:center}
+.icone-menu svg{width:17px;height:17px;stroke-linecap:round;stroke-linejoin:round}
+.selo{min-width:19px;padding:1px 6px;border-radius:10px;background:var(--marca);
+  color:#fff;font-size:11px;font-weight:700;text-align:center;line-height:1.6}
+
+.lateral-rodape{display:flex;align-items:center;gap:6px;margin-left:auto}
+.lateral-acao{padding:7px 12px;border:1px solid rgba(255,255,255,.22);
+  background:transparent;color:rgba(255,255,255,.8);font-size:13px;
+  border-radius:var(--raio);white-space:nowrap}
+.lateral-acao:hover{background:rgba(255,255,255,.1);color:#fff}
+.cartao-usuario{display:flex;align-items:center;gap:8px;padding-left:10px;
+  margin-left:4px;border-left:1px solid rgba(255,255,255,.14)}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--marca);
+  color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;
+  flex:0 0 auto}
+.dados-usuario{min-width:0;display:flex;flex-direction:column;max-width:150px}
+.dados-usuario b{color:#fff;font-size:12.5px;font-weight:600;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.dados-usuario small{color:rgba(255,255,255,.5);font-size:10.5px;
+  text-transform:capitalize}
+
+/* ------------------------------------------------------------ cabeçalho -- */
+header{
+  background:var(--papel); border-bottom:1px solid var(--borda);
+  padding:0 24px; height:58px; display:flex; align-items:center; gap:18px;
+  position:sticky; top:58px; z-index:20;
+}
+.nav-mes{display:flex;align-items:center;gap:4px}
+.nav-mes h1{font-size:18px;font-weight:600;margin:0 10px;min-width:168px;
+  color:var(--tinta)}
+.icone{width:34px;height:34px;border:none;background:transparent;
+  color:var(--tinta-2);display:grid;place-items:center;border-radius:50%;
+  font-size:17px}
+.icone:hover{background:var(--superficie-2);color:var(--tinta)}
+.menu-movel{display:none}
+.acoes{margin-left:auto;display:flex;gap:8px;align-items:center;min-width:0}
+.btn{padding:8px 18px;border:1px solid var(--borda);background:var(--papel);
+  color:var(--tinta);font-weight:500;white-space:nowrap}
+.btn:hover{background:var(--superficie-2)}
+.btn-primario{background:var(--marca);border-color:var(--marca);color:#fff}
+.btn-primario:hover{background:var(--marca-escura)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.veu-lateral{display:none}
+
+/* ------------------------------------------------------- sub-abas ------ */
+/* As páginas unidas guardam funções distintas; sem separação interna
+   virariam uma lista sem começo nem fim. */
+.titulo-pagina{font-size:20px;font-weight:600;margin:0 0 4px;color:var(--tinta)}
+.sub-abas{display:flex;gap:4px;margin:14px 0 20px;border-bottom:1px solid var(--borda)}
+.sub-aba{padding:9px 16px;border:none;background:transparent;font-size:14px;
+  font-weight:500;color:var(--tinta-2);border-bottom:2px solid transparent;
+  margin-bottom:-1px;border-radius:0}
+.sub-aba:hover{color:var(--tinta)}
+.sub-aba.ativa{color:var(--marca);border-bottom-color:var(--marca);font-weight:600}
+
+/* Divisor das seções empilhadas numa mesma página. */
+.separador-secao{display:flex;align-items:center;gap:10px;margin:28px 0 16px;
+  padding-top:20px;border-top:1px solid var(--borda);font-size:15px;
+  font-weight:600;color:var(--tinta)}
+
+/* ---------------------------------------------------------------- corpo -- */
+main{padding:22px 24px;max-width:1500px;margin:0 auto}
+.grade{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start}
+/* Sem isto, um filho largo (o calendário) impede o grid de encolher. */
+.grade>*,.coluna-dupla>*{min-width:0}
+.cartao{background:var(--papel);border:1px solid var(--borda);
+  border-radius:var(--raio);overflow:hidden;min-width:0}
+.grade,.coluna-dupla,aside{min-width:0}
+.cartao h2{
+  margin:0;padding:14px 18px;font-size:13px;font-weight:600;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--tinta-2);border-bottom:1px solid var(--borda)}
+.cartao .conteudo{padding:18px}
+
+/* ------------------------------------------------------------ mensagens -- */
+.aviso{padding:14px 18px;border-radius:var(--raio);margin-bottom:20px;
+  display:flex;gap:12px;align-items:flex-start;border:1px solid}
+.aviso b{display:block;margin-bottom:2px}
+.aviso-info{background:var(--superficie);border-color:var(--borda);color:var(--tinta-2)}
+.aviso-ok{background:var(--verde-suave);border-color:#ceead6;color:#0d652d}
+.aviso-alerta{background:var(--amarelo-suave);border-color:#feefc3;color:var(--amarelo)}
+.aviso-erro{background:var(--vermelho-suave);border-color:#fad2cf;color:#a50e0e}
+.aviso ul{margin:6px 0 0;padding-left:18px}
+
+/* ----------------------------------------------------------- calendário -- */
+.semana,.dias{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.semana div{padding:10px 4px;text-align:center;font-size:11px;font-weight:600;
+  letter-spacing:.06em;color:var(--tinta-3);text-transform:uppercase;
+  border-bottom:1px solid var(--borda)}
+.dia{min-height:104px;border-right:1px solid var(--borda);
+  border-bottom:1px solid var(--borda);padding:8px;background:var(--papel);
+  text-align:left;border-top:none;border-left:none;width:100%;display:block}
+.dia:nth-child(7n){border-right:none}
+.dia.vazio{background:var(--superficie);cursor:default}
+.dia:not(.vazio):hover{background:var(--marca-suave)}
+.topo-dia{display:flex;align-items:center;gap:5px}
+.dia .num{font-size:13px;font-weight:500;color:var(--tinta-2);
+  width:26px;height:26px;display:grid;place-items:center;border-radius:50%;
+  flex:0 0 auto}
+/* Etiqueta em vez de só a barra lateral: o bombeiro encontra os dias dele
+   varrendo o calendário, e uma marca escrita salta mais que uma cor. */
+/* O dia corrente precisa saltar: é a primeira coisa que o supervisor procura. */
+.dia.hoje{background:var(--marca-suave);box-shadow:inset 0 0 0 2px var(--marca)}
+.dia.hoje .num{background:var(--marca);color:#fff;font-weight:700}
+.etiqueta-hoje{font-size:9px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;background:var(--hoje);color:#fff;
+  padding:2px 6px;border-radius:4px;margin-left:auto;line-height:1.4}
+.etiqueta-meu{font-size:9px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;background:var(--destaque);color:#fff;
+  padding:2px 6px;border-radius:4px;margin-left:auto}
+.dia.vermelha .num{background:var(--vermelho-suave);color:#a50e0e}
+.dia.feriado .num{background:var(--vermelho);color:#fff}
+.dia .quem{margin-top:8px;font-size:13px;font-weight:500;line-height:1.3;
+  overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.dia .tag{margin-top:6px;font-size:10px;font-weight:600;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--tinta-3)}
+.dia .tag.travado{color:var(--amarelo)}
+/* Plantão do próprio usuário: achar os seus dias sem varrer 30 linhas. */
+.dia.meu{box-shadow:inset 3px 0 0 var(--destaque)}
+/* Hoje: a informação mais procurada do dia precisa saltar sem ser lida. */
+.dia.hoje{background:var(--hoje-suave);box-shadow:inset 0 0 0 2px var(--hoje)}
+.dia.hoje .num{background:var(--hoje);color:#fff;font-weight:700}
+.dia.hoje.meu{box-shadow:inset 0 0 0 2px var(--hoje),inset 3px 0 0 var(--destaque)}
+
+.dia.meu .quem{color:var(--destaque);font-weight:700}
+tr.meu td{background:var(--superficie-2)}
+tr.meu td:first-child{box-shadow:inset 3px 0 0 var(--destaque)}
+.filtro-meus{display:flex;align-items:center;gap:6px;font-size:13px;
+  color:var(--tinta-2);white-space:nowrap;cursor:pointer;user-select:none}
+.filtro-meus input{width:16px;height:16px;accent-color:var(--marca);cursor:pointer}
+
+/* ----------------------------------------------------- saldo (assinatura)- */
+.saldo-linha{margin-bottom:14px}
+.clicavel{cursor:pointer;border-radius:6px}
+.clicavel:hover{background:var(--superficie)}
+tr.clicavel:hover td{background:var(--superficie)}
+.saldo-topo{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px}
+.saldo-topo b{font-weight:500}
+.barra{position:relative;height:18px;background:var(--superficie-2);border-radius:3px}
+.barra .zero{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;
+  background:var(--borda-forte)}
+.barra i{position:absolute;top:3px;bottom:3px;border-radius:2px;display:block}
+/* Nenhum dos dois lados é "erro": são só posições na conta. O laranja marca
+   quem está acima da parcela justa (vai receber menos adiante) e o carvão,
+   quem está abaixo. Vermelho aqui alarmaria sem motivo. */
+.barra i.mais{background:var(--amarelo);left:50%}
+.barra i.menos{background:var(--carvao-2);right:50%}
+.legenda{font-size:11px;color:var(--tinta-3);margin-top:12px;line-height:1.45}
+
+/* --------------------------------------------------------------- lista --- */
+.estagios{list-style:none;margin:0;padding:0;font-size:13px}
+.estagios li{display:flex;justify-content:space-between;gap:10px;padding:7px 0;
+  border-bottom:1px solid var(--superficie-2)}
+.estagios li:last-child{border:none}
+.estagios span:first-child{color:var(--tinta-2)}
+.estagios span:last-child{font-weight:500;text-align:right}
+
+/* --------------------------------------------------------------- tabela -- */
+.barra-tabela{display:flex;gap:10px;padding:12px 18px;align-items:center;
+  flex-wrap:wrap;border-bottom:1px solid var(--borda)}
+.barra-tabela input[type=text],.barra-tabela input:not([type]){flex:1;min-width:180px;
+  padding:8px 12px;border:1px solid var(--borda);border-radius:var(--raio);
+  font-size:14px;font-family:inherit}
+.barra-tabela .btn{padding:8px 14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+/* O cabeçalho gruda no topo do PRÓPRIO container rolável (.tabela-rolavel),
+   nunca no viewport: ancorar no viewport fazia o cabeçalho flutuar por cima
+   das linhas ao rolar a página. */
+.tabela-rolavel{overflow:auto;max-height:min(70vh,620px)}
+th{text-align:left;padding:11px 18px;font-size:11px;font-weight:600;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--tinta-3);
+  background:var(--papel);position:sticky;top:0;z-index:2;
+  box-shadow:inset 0 -1px 0 var(--borda)}
+td{padding:10px 18px;border-bottom:1px solid var(--superficie-2)}
+tbody tr:hover{background:var(--superficie)}
+.pilula{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11px;
+  font-weight:600;letter-spacing:.02em}
+.pilula.branca{background:var(--superficie-2);color:var(--tinta-2)}
+.pilula.vermelha{background:var(--vermelho-suave);color:#a50e0e}
+.pilula.travado{background:var(--amarelo-suave);color:var(--amarelo)}
+.pilula.ferias{background:var(--marca-suave);color:var(--marca-escura)}
+.pilula.atestado,.pilula.licenca,.pilula.afastamento{
+  background:var(--amarelo-suave);color:var(--amarelo)}
+
+/* ---------------------------------------------------------------- login -- */
+.tela-login{min-height:100vh;display:grid;place-items:center;padding:24px}
+.caixa{background:var(--papel);border:1px solid var(--borda);border-radius:12px;
+  padding:36px;width:100%;max-width:380px;box-shadow:var(--sombra)}
+.caixa h1{font-size:23px;font-weight:700;margin:0;letter-spacing:-.02em;
+  color:var(--tinta)}
+.marca-login{display:flex;align-items:center;gap:11px;margin-bottom:6px}
+.simbolo-login{width:42px;height:42px;border-radius:10px;background:var(--marca);
+  display:grid;place-items:center;flex:0 0 auto}
+.simbolo-login svg{width:29px;height:29px;color:#fff;--vazado:var(--marca)}
+.caixa p{color:var(--tinta-2);margin:0 0 24px;font-size:13px}
+.campo{margin-bottom:14px}
+.campo label{display:block;font-size:12px;font-weight:500;color:var(--tinta-2);
+  margin-bottom:5px}
+.campo input{width:100%;padding:10px 12px;border:1px solid var(--borda);
+  border-radius:var(--raio);font-size:14px;font-family:inherit}
+.oculto{display:none!important}
+
+/* ------------------------------------------------------- pendências ---- */
+.painel-pendencias{background:var(--papel);border:1px solid var(--borda);
+  border-radius:var(--raio);margin-bottom:20px;overflow:hidden}
+.painel-pendencias h2{margin:0;padding:14px 18px;font-size:13px;font-weight:600;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--tinta-2);
+  border-bottom:1px solid var(--borda);display:flex;align-items:center;gap:8px}
+.pendencia{display:flex;align-items:flex-start;gap:11px;padding:13px 18px;
+  border-bottom:1px solid var(--superficie-2);font-size:14px;line-height:1.55}
+.pendencia:last-child{border-bottom:none}
+.pendencia .ponto{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:0 0 auto}
+.pendencia .ponto.alta{background:var(--vermelho)}
+.pendencia .ponto.media{background:var(--amarelo)}
+.pendencia .ponto.baixa{background:var(--borda-forte)}
+.pendencia .texto{flex:1;color:var(--tinta-2)}
+.pendencia .btn{padding:5px 12px;font-size:12px;white-space:nowrap}
+
+/* ------------------------------------------------------ confirmação ---- */
+/* A confirmação abre POR CIMA do painel do dia. Com o mesmo z-index, o painel
+   interceptava os cliques e o botão de confirmar ficava inalcançável. */
+#modal-confirmar{z-index:200}
+.confirmar-caixa{max-width:440px}
+.confirmar-corpo{padding:20px 24px 24px}
+.confirmar-corpo p{margin:0 0 14px;font-size:14px;line-height:1.6;color:var(--tinta-2)}
+.confirmar-corpo p b{color:var(--tinta)}
+.confirmar-campo label{display:block;font-size:12px;font-weight:500;
+  color:var(--tinta-2);margin-bottom:5px}
+.confirmar-campo input{width:100%;padding:10px 12px;border:1px solid var(--borda);
+  border-radius:var(--raio);font-size:14px;font-family:inherit}
+.confirmar-acoes{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+.btn-perigo{background:var(--vermelho);border-color:var(--vermelho);color:#fff}
+.btn-perigo:hover{background:#b3261e}
+
+/* --------------------------------------------------------- painel do dia */
+.dia-cabecalho{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:16px 0 12px}
+.quem-hoje{font-size:19px;font-weight:600;color:var(--tinta)}
+.dia-explicacao{background:var(--superficie);border-left:3px solid var(--marca);
+  padding:12px 14px;border-radius:0 6px 6px 0;font-size:13px;line-height:1.6;
+  color:var(--tinta-2);margin-bottom:18px}
+.acao-rapida{display:flex;gap:14px;align-items:center;justify-content:space-between;
+  background:var(--amarelo-suave);border:1px solid #f6e3c4;border-radius:var(--raio);
+  padding:12px 14px;margin-bottom:18px;flex-wrap:wrap}
+.acao-rapida b{color:var(--amarelo);font-size:14px}
+.acao-rapida .btn{white-space:nowrap}
+.candidatos-titulo{font-size:11px;font-weight:600;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--tinta-3);margin:0 0 4px}
+.candidatos-dica{font-size:12px;color:var(--tinta-3);line-height:1.5;margin:0 0 12px}
+.candidato{display:flex;align-items:center;gap:10px;padding:10px 12px;
+  border:1px solid var(--borda);border-radius:var(--raio);margin-bottom:8px}
+.candidato.bloqueado{opacity:.55;background:var(--superficie)}
+.candidato .marca{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+.candidato .marca.ok{background:var(--verde)}
+.candidato .marca.nao{background:var(--borda-forte)}
+.candidato .crescer{flex:1;min-width:0}
+.candidato-nome{font-weight:500;font-size:14px}
+.candidato-razao{font-size:12px;color:var(--tinta-3);margin-top:2px}
+/* O supervisor precisa LIGAR para quem vai cobrir. No celular o link disca. */
+.tel{color:var(--marca);text-decoration:none;font-variant-numeric:tabular-nums}
+.tel:hover{text-decoration:underline}
+.candidato .saldo{font-family:ui-monospace,Consolas,monospace;font-size:12px;
+  color:var(--tinta-2);white-space:nowrap}
+.mini.ligar{display:inline-flex;align-items:center;text-decoration:none;
+  color:var(--marca);border-color:#f3c9ca}
+.mini.ligar:hover{background:var(--marca-suave)}
+.etiqueta-pref{font-size:10px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;margin-left:7px;padding:1px 6px;border-radius:8px}
+.etiqueta-pref.quer{background:var(--verde-suave);color:#0d652d}
+.etiqueta-pref.evita{background:var(--vermelho-suave);color:var(--vermelho)}
+
+/* Ações do mês ficam junto do mês, não no cabeçalho: são contextuais, e no
+   cabeçalho competiam por espaço com as abas e os botões globais. */
+.barra-mes{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  margin-bottom:16px;padding:10px 14px;background:var(--papel);
+  border:1px solid var(--borda);border-radius:var(--raio)}
+.barra-mes .dica{margin-right:auto;font-size:12px}
+.barra-mes .btn{padding:6px 14px;font-size:13px}
+
+/* ------------------------------------------------------ gerar escala --- */
+.coluna-tripla{display:grid;gap:20px;align-items:start;
+  grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:1200px){.coluna-tripla{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:820px){.coluna-tripla{grid-template-columns:minmax(0,1fr)}}
+.regra{display:flex;gap:10px;align-items:flex-start;font-size:13px;
+  line-height:1.5;padding:6px 0;color:var(--tinta-2)}
+.marca-regra{flex:0 0 auto;font-size:10px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;padding:2px 7px;border-radius:9px;margin-top:1px}
+.marca-regra.fixa{background:var(--marca-suave);color:var(--marca-escura)}
+.marca-regra.ordem{background:var(--superficie-2);color:var(--tinta-2);
+  min-width:22px;text-align:center}
+.numeros-resultado{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;
+  margin-bottom:16px}
+.numero-caixa{border:1px solid var(--borda);border-radius:var(--raio);
+  padding:12px 14px}
+.numero-caixa .rotulo{font-size:10px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--tinta-3)}
+.numero-caixa .valor{font-size:24px;font-weight:600;margin-top:2px}
+.numero-caixa.alerta .valor{color:var(--vermelho)}
+/* A linha rótulo-valor vem do painel "Por quê?", que é largo. Nesta coluna
+   estreita os dois colidiam, então empilham. */
+#ger-resultado .pq-linha{flex-direction:column;gap:2px;align-items:flex-start}
+#ger-resultado .pq-linha .valor{white-space:normal;font-size:12px;
+  color:var(--tinta-2)}
+
+/* --------------------------------------------------- por que a escala -- */
+.pq-secao{margin:18px 0 0}
+.pq-secao:first-child{margin-top:6px}
+.pq-secao h3{font-size:13px;font-weight:600;margin:0 0 8px;color:var(--tinta)}
+.pq-linha{display:flex;gap:10px;padding:7px 0;font-size:13px;line-height:1.5;
+  border-bottom:1px solid var(--superficie-2);color:var(--tinta-2)}
+.pq-linha:last-child{border-bottom:none}
+.pq-linha .rotulo{flex:1;min-width:0}
+.pq-linha .valor{font-family:ui-monospace,Consolas,monospace;white-space:nowrap;
+  color:var(--tinta)}
+.pq-resumo{background:var(--marca-suave);border:1px solid #f7cfd0;color:var(--marca-escura);
+  border-radius:var(--raio);padding:14px 16px;font-size:14px;line-height:1.65}
+.pq-nota{font-size:12px;color:var(--tinta-3);line-height:1.55;margin:6px 0 0}
+.pq-vazio{font-size:13px;color:var(--tinta-3);padding:6px 0}
+.pq-saldo-neg{color:var(--carvao-2)}
+.pq-saldo-pos{color:var(--amarelo)}
+
+/* ----------------------------------------------------------- extrato -- */
+.extrato-linha{display:grid;grid-template-columns:1fr auto auto auto;gap:12px;
+  align-items:center;padding:10px 0;border-bottom:1px solid var(--superficie-2);
+  font-size:13px}
+.extrato-linha:last-child{border-bottom:none}
+.extrato-linha .cat{color:var(--tinta-2);text-transform:capitalize}
+.extrato-linha .meus{font-weight:700;font-size:15px;text-align:right;min-width:34px}
+.extrato-linha .media{color:var(--tinta-3);font-size:12px;text-align:right;
+  white-space:nowrap}
+.extrato-veredito{font-size:11px;font-weight:700;letter-spacing:.03em;
+  text-transform:uppercase;padding:2px 8px;border-radius:10px;white-space:nowrap}
+.veredito-acima{background:var(--amarelo-suave);color:var(--amarelo)}
+.veredito-abaixo{background:var(--superficie-2);color:var(--tinta-2)}
+.veredito-media{background:var(--verde-suave);color:#0d652d}
+.extrato-cabecalho{background:var(--superficie);border-radius:var(--raio);
+  padding:14px 16px;margin-bottom:16px;font-size:13px;line-height:1.6;
+  color:var(--tinta-2)}
+
+/* --------------------------------------------------------- relatórios -- */
+.cartoes-numero{display:grid;gap:16px;
+  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:20px}
+.cartao-numero{background:var(--papel);border:1px solid var(--borda);
+  border-radius:var(--raio);padding:18px 20px}
+.cartao-numero .valor{font-size:30px;font-weight:600;line-height:1.1;
+  color:var(--tinta)}
+.cartao-numero.destaque .valor{color:var(--marca)}
+.cartao-numero .rotulo{font-size:12px;color:var(--tinta-2);margin-top:6px;
+  line-height:1.45}
+.barra-uso{height:5px;background:var(--superficie-2);border-radius:3px;
+  margin-top:10px;overflow:hidden}
+.barra-uso i{display:block;height:100%;background:var(--marca);border-radius:3px}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+th.num{text-align:right}
+.auditoria-op{display:inline-block;padding:1px 7px;border-radius:9px;
+  font-size:10px;font-weight:700;letter-spacing:.03em;margin-right:6px}
+.auditoria-op.INSERT{background:var(--verde-suave);color:#0d652d}
+.auditoria-op.UPDATE{background:var(--marca-suave);color:var(--marca-escura)}
+.auditoria-op.DELETE{background:var(--vermelho-suave);color:var(--vermelho)}
+.auditoria-linha{font-size:12px;color:var(--tinta-3);line-height:1.5;margin-top:3px}
+
+/* ---------------------------------------------------------- ajuda ------ */
+.modal{position:fixed;inset:0;background:rgba(32,33,36,.5);z-index:100;
+  display:flex;align-items:center;justify-content:center;padding:24px}
+.modal-caixa{background:var(--papel);border-radius:12px;width:100%;
+  max-width:720px;max-height:85vh;display:flex;flex-direction:column;
+  box-shadow:0 8px 32px rgba(0,0,0,.24)}
+.modal-topo{padding:20px 24px;border-bottom:1px solid var(--borda);
+  display:flex;align-items:center;gap:12px}
+.modal-topo h2{margin:0;font-size:17px;font-weight:600;color:var(--tinta);
+  padding:0;border:none;text-transform:none;letter-spacing:0}
+.modal-topo .fechar-modal{margin-left:auto;border:none;background:transparent;
+  font-size:24px;line-height:1;color:var(--tinta-3);cursor:pointer;padding:0 4px}
+.modal-topo .fechar-modal:hover{color:var(--tinta)}
+.modal-corpo{padding:0 24px 24px;overflow-y:auto}
+.ajuda-abas{display:flex;gap:2px;padding:14px 0;position:sticky;top:0;
+  background:var(--papel);flex-wrap:wrap;z-index:1}
+.ajuda-aba{padding:6px 12px;border:1px solid transparent;background:transparent;
+  border-radius:var(--raio);font-size:13px;color:var(--tinta-2);font-weight:500}
+.ajuda-aba:hover{background:var(--superficie-2)}
+.ajuda-aba.ativa{background:var(--marca-suave);color:var(--marca);
+  border-color:#f7cfd0;font-weight:600}
+.ajuda-secao h3{font-size:14px;font-weight:600;margin:20px 0 6px;color:var(--tinta)}
+.ajuda-secao h3:first-child{margin-top:4px}
+.ajuda-secao p{margin:0 0 10px;font-size:14px;line-height:1.6;color:var(--tinta-2)}
+.ajuda-secao ol,.ajuda-secao ul{margin:0 0 12px;padding-left:20px;
+  font-size:14px;line-height:1.7;color:var(--tinta-2)}
+.ajuda-secao li{margin-bottom:4px}
+.ajuda-secao b{color:var(--tinta);font-weight:600}
+.ajuda-nota{background:var(--superficie);border-left:3px solid var(--marca);
+  padding:12px 14px;border-radius:0 6px 6px 0;margin:12px 0;font-size:13px;
+  line-height:1.6;color:var(--tinta-2)}
+.ajuda-nota.atencao{border-left-color:var(--amarelo);background:var(--amarelo-suave)}
+.legenda-cores{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 14px}
+.legenda-cores span{display:inline-flex;align-items:center;gap:6px;
+  font-size:12px;color:var(--tinta-2)}
+.legenda-cores i{width:14px;height:14px;border-radius:4px;display:block}
+@media (max-width:560px){
+  .modal{padding:0}
+  .modal-caixa{max-width:100%;max-height:100vh;border-radius:0;height:100%}
+}
+
+/* --------------------------------------------------------- instalação -- */
+.faixa-instalar{background:var(--marca-suave);border-bottom:1px solid #f7cfd0;
+  padding:10px 24px;display:flex;align-items:center;gap:12px;font-size:13px;
+  color:var(--marca-escura)}
+.faixa-instalar b{font-weight:600}
+.faixa-instalar .btn{padding:6px 14px;font-size:13px;margin-left:auto}
+.faixa-instalar .fechar{border:none;background:transparent;color:var(--marca-escura);
+  font-size:18px;line-height:1;padding:0 4px;opacity:.6;cursor:pointer}
+.faixa-instalar .fechar:hover{opacity:1}
+@media (max-width:560px){
+  .faixa-instalar{padding:10px 14px;gap:8px;font-size:12px}
+  .faixa-instalar .btn{padding:6px 10px;font-size:12px}
+}
+/* Já instalado: nada de convite para instalar de novo. */
+@media (display-mode:standalone){.faixa-instalar{display:none!important}}
+
+/* ------------------------------------------------------------ abas ----- */
+.abas{display:flex;gap:2px;margin-left:16px}
+.aba{padding:8px 16px;border:1px solid transparent;background:transparent;
+  color:var(--tinta-2);font-weight:500;border-radius:var(--raio);
+  white-space:nowrap}
+.aba:hover{background:var(--superficie-2)}
+.aba.ativa{background:var(--marca-suave);color:var(--marca);font-weight:600;
+  border-color:#f7cfd0}
+.selo{display:inline-block;min-width:18px;padding:1px 5px;border-radius:9px;
+  background:var(--marca);color:#fff;font-size:11px;font-weight:700;
+  line-height:1.5;text-align:center;margin-left:4px}
+
+/* ---------------------------------------------------------- trocas ----- */
+.troca{border:1px solid var(--borda);border-radius:var(--raio);padding:14px 16px;
+  margin-bottom:12px;display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
+.troca-info{flex:1;min-width:220px}
+.troca-titulo{font-weight:600;font-size:14px;margin-bottom:3px}
+.troca-detalhe{font-size:13px;color:var(--tinta-2);line-height:1.55}
+.troca-motivo{font-size:13px;color:var(--tinta-2);font-style:italic;margin-top:5px}
+.troca-acoes{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.troca-alerta{width:100%;margin-top:10px;padding:9px 12px;border-radius:6px;
+  background:var(--amarelo-suave);border:1px solid #feefc3;color:var(--amarelo);
+  font-size:12px;line-height:1.5}
+.status-pill{display:inline-block;padding:2px 9px;border-radius:11px;
+  font-size:11px;font-weight:600}
+.status-solicitada{background:var(--marca-suave);color:var(--marca-escura)}
+.status-aceita{background:var(--amarelo-suave);color:var(--amarelo)}
+.status-aprovada{background:var(--verde-suave);color:#0d652d}
+.status-recusada,.status-cancelada{background:var(--superficie-2);color:var(--tinta-3)}
+
+/* ---------------------------------------------------- acoes da tabela -- */
+.acoes-linha{display:flex;gap:4px;justify-content:flex-end;align-items:center}
+.mini{padding:5px 9px;font-size:12px;border:1px solid var(--borda);
+  background:var(--papel);color:var(--tinta-2);border-radius:6px;font-weight:500;
+  white-space:nowrap;line-height:1}
+.mini:hover{background:var(--superficie-2);color:var(--tinta)}
+.mini.perigo{color:var(--vermelho);border-color:#fad2cf}
+.mini.perigo:hover{background:var(--vermelho-suave)}
+.editando{background:var(--amarelo-suave)!important}
+
+/* ------------------------------------------------------- formulários --- */
+.form-linha{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.form-campo{flex:1;min-width:140px}
+.form-campo label{display:block;font-size:12px;font-weight:500;
+  color:var(--tinta-2);margin-bottom:5px}
+.form-campo input,.form-campo select{width:100%;padding:9px 12px;
+  border:1px solid var(--borda);border-radius:var(--raio);font-size:14px;
+  font-family:inherit;background:var(--papel);color:var(--tinta)}
+.dica{font-size:12px;color:var(--tinta-3);margin:10px 0 0;line-height:1.45}
+
+/* ------------------------------------------------------------ chips ---- */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:6px 8px 6px 12px;
+  border-radius:16px;font-size:13px;background:var(--superficie-2);
+  border:1px solid var(--borda)}
+.chip.ferias{background:var(--marca-suave);border-color:#f7cfd0;color:var(--marca-escura)}
+.chip.atestado,.chip.licenca,.chip.afastamento{background:var(--amarelo-suave);
+  border-color:#feefc3;color:var(--amarelo)}
+.chip.quer{background:var(--verde-suave);border-color:#ceead6;color:#0d652d}
+.chip.evita{background:var(--vermelho-suave);border-color:#fad2cf;color:#a50e0e}
+.chip button{border:none;background:transparent;color:inherit;opacity:.6;
+  font-size:16px;line-height:1;padding:0 2px;cursor:pointer}
+.chip button:hover{opacity:1}
+
+/* ---------------------------------------------------------- credencial - */
+.credencial{background:var(--verde-suave);border:1px solid #ceead6;
+  border-radius:var(--raio);padding:16px;margin-top:16px}
+.credencial b{display:block;color:#0d652d;margin-bottom:8px}
+.credencial code{display:block;background:var(--papel);border:1px solid var(--borda);
+  border-radius:6px;padding:10px 12px;font-family:ui-monospace,'Cascadia Mono',
+  'Segoe UI Mono',Consolas,monospace;
+  font-size:14px;margin-bottom:6px;word-break:break-all}
+.coluna-dupla{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:20px;align-items:start}
+/* O formulário é uma coluna estreita; a tabela de equipe precisa do resto do
+   espaço para caber os quatro botões de ação sem cortar. */
+.coluna-equipe{grid-template-columns:320px minmax(0,1fr)}
+/* Os quatro botões de ação são o que faz a tabela estourar. Encolhê-los aqui
+   resolve em qualquer largura, em vez de perseguir breakpoint. */
+.coluna-equipe th,.coluna-equipe td{padding-left:12px;padding-right:12px}
+.coluna-equipe .mini{padding:5px 8px;font-size:11.5px}
+.coluna-equipe .acoes-linha{gap:4px}
+@media (max-width:1400px){
+  .coluna-equipe{grid-template-columns:minmax(0,1fr)}
+  .coluna-equipe th,.coluna-equipe td{padding-left:10px;padding-right:10px}
+  .coluna-equipe .mini{padding:5px 6px;font-size:11px}
+  .coluna-equipe .acoes-linha{gap:3px}
+}
+@media (max-width:1100px){
+  .coluna-equipe{grid-template-columns:minmax(0,1fr)}
+  /* Nomes completos + quatro ações estouram a largura nesta faixa. */
+  .coluna-equipe th,.coluna-equipe td{padding-left:12px;padding-right:12px}
+  .coluna-equipe .mini{padding:5px 7px;font-size:11px}
+  .coluna-equipe .acoes-linha{gap:3px}
+}
+@media (max-width:900px){.coluna-dupla{grid-template-columns:minmax(0,1fr)}}
+.vazio-estado{padding:56px 24px;text-align:center;color:var(--tinta-2)}
+.vazio-estado b{display:block;color:var(--tinta);margin-bottom:6px;font-size:15px}
+.rodape{padding:16px 24px;text-align:center;color:var(--tinta-3);font-size:12px}
+@media (max-width:1024px){
+  .grade{grid-template-columns:minmax(0,1fr)}
+  main{padding:16px}
+  .dia{min-height:76px;padding:5px}
+  .dia .quem{font-size:11px}
+}
+
+/* A barra superior comporta as quatro abas até telas estreitas. Abaixo de
+   900px a marca e o cartão do usuário saem, e as abas ganham a largura toda —
+   rolando na horizontal se precisar, sem esconder nada atrás de um menu. */
+@media (max-width:900px){
+  .quadro{overflow-x:clip}
+  .lateral{gap:10px;padding:0 12px;height:auto;min-height:52px;flex-wrap:wrap}
+  .lateral-nome{display:none}
+  .dados-usuario{display:none}
+  .cartao-usuario{padding-left:0;margin-left:0;border-left:none}
+  .lateral-acao{padding:6px 10px;font-size:12.5px}
+  .aba{padding:8px 11px;font-size:13.5px}
+  header{padding:0 14px;gap:10px;top:52px}
+  .nav-mes h1{font-size:16px;margin:0 6px;min-width:0}
+}
+@media (max-width:560px){
+  /* Nesta largura as abas ocupam uma linha própria abaixo da marca. */
+  .lateral{padding:8px 12px;row-gap:6px}
+  .lateral-menu{order:3;width:100%}
+  .lateral-rodape{order:2}
+  header{top:auto;position:static}
+}
+
+@media (max-width:560px){
+  main{padding:12px}
+  .semana,.dias{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .semana div{padding:7px 2px;font-size:10px}
+  .dia{min-height:68px;padding:5px 4px}
+  .dia:nth-child(7n){border-right:1px solid var(--borda)}
+  .dia:nth-child(4n){border-right:none}
+  .dia .num{width:22px;height:22px;font-size:12px}
+  .dia .quem{font-size:10px;margin-top:5px;-webkit-line-clamp:2}
+  .dia .tag{font-size:9px}
+  .coluna-dupla{grid-template-columns:minmax(0,1fr);gap:14px}
+  .form-linha{flex-direction:column;align-items:stretch}
+  .form-campo{min-width:0;width:100%}
+  .form-linha .btn{width:100%}
+  .barra-tabela{gap:8px}
+  .barra-tabela .btn{flex:1;min-width:0;padding:8px 6px}
+  .acoes{gap:6px;min-width:0}
+  .acoes .btn{padding:8px 10px;font-size:12.5px;overflow:hidden;
+    text-overflow:ellipsis}
+  /* Em 390px os dois botões não cabem por extenso; o rótulo curto entra por
+     CSS para o texto completo continuar disponível a leitores de tela. */
+  #btn-gerar{font-size:0}
+  #btn-gerar:after{content:"Gerar";font-size:12.5px}
+  .cartao .conteudo{padding:14px}
+  th,td{padding:9px 10px}
+  /* Em telas estreitas a tabela vira lista: cada linha empilha rótulo e
+     valor, em vez de espremer cinco colunas em 364px. */
+  .tabela-rolavel table,.tabela-rolavel thead,.tabela-rolavel tbody,
+  .tabela-rolavel th,.tabela-rolavel td,.tabela-rolavel tr{display:block}
+  .tabela-rolavel thead{position:absolute;left:-9999px}
+  .tabela-rolavel tbody tr{border-bottom:1px solid var(--borda);
+    padding:10px 14px;display:grid;grid-template-columns:auto 1fr;
+    gap:4px 10px;align-items:center}
+  .tabela-rolavel tbody td{border:none;padding:2px 0}
+  .tabela-rolavel tbody td:before{content:attr(data-rotulo);
+    font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--tinta-3);display:block;margin-bottom:2px}
+  .tabela-rolavel tbody td[colspan]{grid-column:1/-1}
+  .tabela-rolavel tbody td:empty{display:none}
+  tr.meu td{background:transparent}
+  tr.meu{background:var(--superficie-2);box-shadow:inset 3px 0 0 var(--destaque)}
+  .acoes-linha{justify-content:flex-start;flex-wrap:wrap}
+  .credencial code{font-size:13px}
+}
+@media (max-width:380px){@media (max-width:380px){
+  .semana,.dias{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .dia:nth-child(4n){border-right:1px solid var(--borda)}
+  .dia:nth-child(3n){border-right:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+
+<!-- ============================================== CONFIRMAÇÃO ========== -->
+<div class="modal oculto" id="modal-confirmar"
+     onclick="if(event.target===this)responderConfirmacao(null)">
+  <div class="modal-caixa confirmar-caixa" role="dialog" aria-modal="true">
+    <div class="modal-topo">
+      <h2 id="confirmar-titulo"></h2>
+      <button class="fechar-modal" onclick="responderConfirmacao(null)"
+              aria-label="Cancelar">&times;</button>
+    </div>
+    <div class="confirmar-corpo">
+      <p id="confirmar-texto"></p>
+      <div class="confirmar-campo oculto" id="confirmar-campo">
+        <label for="confirmar-entrada" id="confirmar-rotulo"></label>
+        <input id="confirmar-entrada" type="text" autocomplete="off">
+      </div>
+      <div class="confirmar-acoes">
+        <button class="btn" onclick="responderConfirmacao(null)">Cancelar</button>
+        <button class="btn btn-primario" id="confirmar-ok"
+                onclick="responderConfirmacao(true)">Confirmar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================== PAINEL DO DIA ==== -->
+<div class="modal oculto" id="modal-dia" onclick="if(event.target===this)fecharDia()">
+  <div class="modal-caixa" role="dialog" aria-modal="true">
+    <div class="modal-topo">
+      <h2 id="dia-titulo">Dia</h2>
+      <button class="fechar-modal" onclick="fecharDia()" aria-label="Fechar">&times;</button>
+    </div>
+    <div class="modal-corpo" id="dia-corpo"></div>
+  </div>
+</div>
+
+<!-- ============================================ POR QUE ESTA ESCALA ==== -->
+<div class="modal oculto" id="modal-porque" onclick="if(event.target===this)fecharPorque()">
+  <div class="modal-caixa" role="dialog" aria-modal="true">
+    <div class="modal-topo">
+      <h2 id="porque-titulo">Por que esta escala</h2>
+      <button class="fechar-modal" onclick="fecharPorque()" aria-label="Fechar">&times;</button>
+    </div>
+    <div class="modal-corpo" id="porque-corpo"></div>
+  </div>
+</div>
+
+<!-- ================================================== EXTRATO ========== -->
+<div class="modal oculto" id="modal-extrato"
+     onclick="if(event.target===this)fecharExtrato()">
+  <div class="modal-caixa" role="dialog" aria-modal="true">
+    <div class="modal-topo">
+      <h2 id="extrato-titulo">Extrato</h2>
+      <button class="fechar-modal" onclick="fecharExtrato()" aria-label="Fechar">&times;</button>
+    </div>
+    <div class="modal-corpo" id="extrato-corpo"></div>
+  </div>
+</div>
+
+<!-- ==================================================== AJUDA ========== -->
+<div class="modal oculto" id="modal-ajuda" onclick="if(event.target===this)fecharAjuda()">
+  <div class="modal-caixa" role="dialog" aria-modal="true" aria-labelledby="ajuda-titulo">
+    <div class="modal-topo">
+      <h2 id="ajuda-titulo">Como usar o sistema</h2>
+      <button class="fechar-modal" onclick="fecharAjuda()" aria-label="Fechar">&times;</button>
+    </div>
+    <div class="modal-corpo">
+      <div class="ajuda-abas" id="ajuda-abas"></div>
+      <div id="ajuda-conteudo"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------- login -- -->
+<div class="tela-login" id="tela-login">
+  <div class="caixa">
+    <div class="marca-login">
+      <span class="simbolo-login">
+        <svg viewBox="0 0 128 128" aria-hidden="true">
+          <path fill="currentColor" d="M64 14c-17.7 0-32 13.9-32 31v9h64v-9c0-17.1-14.3-31-32-31Z"/>
+          <rect x="14" y="54" width="100" height="13" rx="6.5" fill="currentColor"/>
+          <path fill="var(--vazado)" d="M56 26h16v22c0 3-2.4 5-8 8-5.6-3-8-5-8-8V26Z"/>
+          <rect x="26" y="78" width="62" height="42" rx="7" fill="currentColor"/>
+          <rect x="38" y="70" width="9" height="15" rx="4.5" fill="currentColor"/>
+          <rect x="67" y="70" width="9" height="15" rx="4.5" fill="currentColor"/>
+          <rect x="34" y="92" width="46" height="4" rx="2" fill="var(--vazado)"/>
+          <rect x="34" y="101" width="12" height="10" rx="3" fill="var(--vazado)"/>
+          <rect x="51" y="101" width="12" height="10" rx="3" fill="var(--vazado)"/>
+          <circle cx="97" cy="105" r="21" fill="var(--vazado)"/>
+          <circle cx="97" cy="105" r="16" fill="currentColor"/>
+          <path d="M89.5 105.5l5 5 10-10" stroke="var(--vazado)" stroke-width="5"
+                stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+      </span>
+      <h1>Escalas<span style="color:var(--marca)">&nbsp;BM</span></h1>
+    </div>
+    <p>Escalas de bombeiros — entre com seu e-mail</p>
+    <div class="campo">
+      <label for="email">E-mail</label>
+      <input id="email" type="email" autocomplete="username"
+             placeholder="seu.nome@cb.sc.gov.br">
+    </div>
+    <div class="campo">
+      <label for="senha">Senha</label>
+      <input id="senha" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primario" style="width:100%;margin-top:8px" onclick="entrar()">Entrar</button>
+    <div id="erro-login" class="aviso aviso-erro oculto" style="margin:16px 0 0"></div>
+  </div>
+</div>
+
+<!-- ----------------------------------------------------- trocar senha -- -->
+<div class="tela-login oculto" id="tela-senha">
+  <div class="caixa">
+    <h1>Escolha sua senha</h1>
+    <p>A senha que você recebeu é temporária. Defina uma nova para continuar.</p>
+    <div class="campo">
+      <label for="senha-nova">Nova senha</label>
+      <input id="senha-nova" type="password" autocomplete="new-password"
+             placeholder="Ao menos 8 caracteres">
+    </div>
+    <div class="campo">
+      <label for="senha-conf">Repita a nova senha</label>
+      <input id="senha-conf" type="password" autocomplete="new-password">
+    </div>
+    <button class="btn btn-primario" style="width:100%;margin-top:8px"
+            onclick="salvarSenha()">Salvar e continuar</button>
+    <div id="erro-senha" class="aviso aviso-erro oculto" style="margin:16px 0 0"></div>
+  </div>
+</div>
+
+<!-- --------------------------------------------------------- aplicação -- -->
+<div id="app" class="oculto">
+<div class="faixa-instalar oculto" id="faixa-instalar">
+  <span><b>Instalar o aplicativo</b> — abre direto da tela inicial, sem navegador.</span>
+  <button class="btn btn-primario" onclick="instalar()">Instalar</button>
+  <button class="fechar" onclick="dispensarInstalacao()" aria-label="Agora não">&times;</button>
+</div>
+
+<div class="quadro">
+  <!-- Menu lateral: com cinco seções, aba horizontal disputava espaço com os
+       botões de ação e estourava o cabeçalho. A lateral também abre lugar para
+       o cartão do usuário e escala se surgir seção nova. -->
+  <aside class="lateral" id="lateral">
+    <div class="lateral-marca">
+      <span class="simbolo">
+        <svg viewBox="0 0 128 128" aria-hidden="true">
+          <path fill="currentColor" d="M64 14c-17.7 0-32 13.9-32 31v9h64v-9c0-17.1-14.3-31-32-31Z"/>
+          <rect x="14" y="54" width="100" height="13" rx="6.5" fill="currentColor"/>
+          <path fill="var(--vazado)" d="M56 26h16v22c0 3-2.4 5-8 8-5.6-3-8-5-8-8V26Z"/>
+          <rect x="26" y="78" width="62" height="42" rx="7" fill="currentColor"/>
+          <rect x="38" y="70" width="9" height="15" rx="4.5" fill="currentColor"/>
+          <rect x="67" y="70" width="9" height="15" rx="4.5" fill="currentColor"/>
+          <rect x="34" y="92" width="46" height="4" rx="2" fill="var(--vazado)"/>
+          <rect x="34" y="101" width="12" height="10" rx="3" fill="var(--vazado)"/>
+          <rect x="51" y="101" width="12" height="10" rx="3" fill="var(--vazado)"/>
+          <circle cx="97" cy="105" r="21" fill="var(--vazado)"/>
+          <circle cx="97" cy="105" r="16" fill="currentColor"/>
+          <path d="M89.5 105.5l5 5 10-10" stroke="var(--vazado)" stroke-width="5"
+                stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+      </span>
+      <span class="lateral-nome">Escalas<span class="fogo">&nbsp;BM</span></span>
+    </div>
+
+    <nav class="lateral-menu" id="abas" aria-label="Seções do sistema">
+      <button class="aba ativa" data-vista="escala" onclick="irPara('escala')">
+        <span class="icone-menu" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>
+          </svg></span>
+        Escala
+      </button>
+      <button class="aba" data-vista="datas" onclick="irPara('datas')">
+        <span class="icone-menu" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 8h13l-3-3M20 16H7l3 3"/>
+          </svg></span>
+        <span data-rotulo-datas>Datas</span>
+        <span id="selo-trocas" class="selo oculto">0</span>
+      </button>
+      <button class="aba oculto" data-vista="config" onclick="irPara('config')">
+        <span class="icone-menu" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="12" cy="12" r="3.2"/>
+            <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.9 19l-.1.1A2 2 0 1 1 5 16.3l.1-.1A1.6 1.6 0 0 0 4 13.5H4a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 5.5 6.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3h.1A1.6 1.6 0 0 0 11.2 3V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1h.1a2 2 0 1 1 0 4H21a1.6 1.6 0 0 0-1.5 1Z"/>
+          </svg></span>
+        Configurações
+      </button>
+      <button class="aba oculto" data-vista="relatorios" onclick="irPara('relatorios')">
+        <span class="icone-menu" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>
+          </svg></span>
+        Relatórios
+      </button>
+    </nav>
+
+    <div class="lateral-rodape">
+      <button class="lateral-acao" id="btn-ajuda" onclick="abrirAjuda()"
+              title="Como usar o sistema">Ajuda</button>
+      <button class="lateral-acao" id="btn-sair" onclick="sair()"
+              title="Encerrar a sessão">Sair</button>
+      <div class="cartao-usuario">
+        <span class="avatar" id="avatar"></span>
+        <span class="dados-usuario">
+          <b id="quem"></b>
+          <small id="quem-papel"></small>
+        </span>
+      </div>
+    </div>
+  </aside>
+
+  <div class="conteudo-principal">
+    <header>
+      <button class="icone menu-movel" onclick="alternarLateral()"
+              aria-label="Abrir menu">&#9776;</button>
+      <div class="nav-mes">
+        <button class="icone" onclick="mudarMes(-1)" aria-label="Mês anterior">&#8249;</button>
+        <h1 id="titulo-mes"></h1>
+        <button class="icone" onclick="mudarMes(1)" aria-label="Próximo mês">&#8250;</button>
+      </div>
+      <div class="acoes">
+        <button class="btn" id="btn-publicar" onclick="publicar()">Publicar</button>
+        <button class="btn btn-primario" id="btn-gerar" onclick="gerar()">Gerar escala</button>
+      </div>
+    </header>
+
+<main>
+  <div id="mensagem"></div>
+  <div class="painel-pendencias oculto" id="painel-pendencias">
+    <h2>Precisa da sua atenção <span class="selo" id="selo-pendencias">0</span></h2>
+    <div id="lista-pendencias"></div>
+  </div>
+
+  <!-- =================================================== VISTA: ESCALA -->
+  <div class="vista" id="vista-escala">
+  <div class="barra-mes oculto" id="barra-mes">
+    <span class="dica" style="margin:0">Ações deste mês</span>
+    <button class="btn" id="btn-porque" onclick="abrirPorque()"
+            title="Entender por que o mês saiu assim">Por quê?</button>
+    <button class="btn" id="btn-recomecar" onclick="recomecarEscala()"
+            title="Descartar o rascunho e montar de novo do zero">Recomeçar do zero</button>
+  </div>
+  <div class="grade">
+    <div>
+      <div class="cartao" style="margin-bottom:20px">
+        <div class="semana">
+          <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div>
+          <div>Qui</div><div>Sex</div><div>Sáb</div>
+        </div>
+        <div class="dias" id="calendario"></div>
+      </div>
+
+      <div class="cartao">
+        <h2>Escala do mês</h2>
+        <div class="barra-tabela">
+          <input id="busca" placeholder="Filtrar por bombeiro, data ou tipo"
+                 oninput="desenharTabela()">
+          <label class="filtro-meus oculto" id="rotulo-meus">
+            <input type="checkbox" id="so-meus" onchange="desenharTabela()">
+            Só os meus
+          </label>
+          <button class="btn" onclick="exportar('pdf')" title="Para imprimir e afixar">PDF</button>
+          <button class="btn" onclick="exportar('xlsx')" title="Planilha formatada">Excel</button>
+          <button class="btn" onclick="exportar('csv')" title="Para outras ferramentas">CSV</button>
+          <button class="btn" onclick="copiarParaGrupo()"
+                  title="Copiar em texto para colar no WhatsApp">Copiar texto</button>
+        </div>
+        <div class="tabela-rolavel">
+          <table>
+            <thead><tr>
+              <th>Data</th><th>Dia</th><th>Tipo</th><th>Bombeiro</th><th>Observações</th>
+            </tr></thead>
+            <tbody id="tabela"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <aside>
+      <div class="cartao" style="margin-bottom:20px">
+        <h2>Saldo de equidade</h2>
+        <div class="conteudo" id="equidade"></div>
+      </div>
+      <div class="cartao">
+        <h2>Como o motor decidiu</h2>
+        <div class="conteudo">
+          <ul class="estagios" id="estagios"></ul>
+        </div>
+      </div>
+    </aside>
+  </div>
+  </div>
+
+  <!-- ============================================ VISTA: MINHAS DATAS -->
+  
+
+  <!-- ==================================================== VISTA: GERAR -->
+  
+
+  <!-- =================================================== VISTA: TROCAS -->
+  
+
+  <!-- =================================================== VISTA: EQUIPE -->
+  
+
+  <!-- ================================================ VISTA: RELATÓRIOS -->
+  <div class="vista oculto" id="vista-relatorios">
+    <div class="barra-tabela" style="border:none;padding:0 0 16px">
+      <label class="filtro-meus" for="rel-ano">Ano</label>
+      <select id="rel-ano" onchange="carregarRelatorios()"
+              style="max-width:120px;padding:8px 12px;border:1px solid var(--borda);
+                     border-radius:var(--raio);font-size:14px;font-family:inherit"></select>
+    </div>
+
+    <div id="rel-numeros"></div>
+
+    <div class="cartao" style="margin-bottom:20px">
+      <h2>Plantões por bombeiro no ano</h2>
+      <div class="tabela-rolavel">
+        <table>
+          <thead><tr>
+            <th>Bombeiro</th><th class="num">Total</th><th class="num">Branca</th>
+            <th class="num">Vermelha</th><th class="num">Sábado</th>
+            <th class="num">Domingo</th><th class="num">Feriado</th>
+          </tr></thead>
+          <tbody id="rel-tabela"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="cartao">
+      <h2>Registro de alterações</h2>
+      <p class="dica" style="padding:14px 18px 0;margin:0">
+        Tudo que muda no sistema fica registrado: quem alterou, quando, o que
+        havia antes e depois, e o motivo informado.
+      </p>
+      <div class="tabela-rolavel">
+        <table>
+          <thead><tr>
+            <th>Quando</th><th>O quê</th><th>Quem</th><th>Motivo</th>
+          </tr></thead>
+          <tbody id="rel-auditoria"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================================================== VISTA: DATAS -->
+  <div class="vista oculto" id="vista-datas">
+    <h2 class="titulo-pagina" id="titulo-datas">Datas</h2>
+
+
+
+    <div class="cartao oculto" id="seletor-bombeiro" style="margin-bottom:20px">
+      <h2>De quem são as datas</h2>
+      <div class="conteudo">
+        <div class="form-campo" style="max-width:340px">
+          <label for="alvo-bombeiro">Bombeiro</label>
+          <select id="alvo-bombeiro" onchange="carregarDatas()"></select>
+        </div>
+        <p class="dica">
+          Supervisor e administrador podem registrar datas em nome de qualquer
+          bombeiro — útil quando o aviso chega por telefone ou no plantão.
+        </p>
+      </div>
+    </div>
+
+    <div class="coluna-dupla">
+      <div class="cartao">
+        <h2>Dias em que não posso trabalhar</h2>
+        <div class="conteudo">
+          <div class="form-linha">
+            <div class="form-campo">
+              <label for="ind-inicio">De</label>
+              <input id="ind-inicio" type="date">
+            </div>
+            <div class="form-campo">
+              <label for="ind-fim">Até</label>
+              <input id="ind-fim" type="date">
+            </div>
+            <div class="form-campo">
+              <label for="ind-tipo">Motivo</label>
+              <select id="ind-tipo">
+                <option value="ferias">Férias</option>
+                <option value="atestado">Atestado</option>
+                <option value="licenca">Licença</option>
+                <option value="afastamento">Afastamento</option>
+              </select>
+            </div>
+            <button class="btn btn-primario" onclick="salvarIndisponibilidade()">
+              Adicionar
+            </button>
+          </div>
+          <p class="dica">
+            O sistema nunca escala ninguém nesses dias — é regra obrigatória.
+            Para um único dia, use a mesma data nos dois campos.
+          </p>
+          <div id="erro-ind" class="aviso aviso-erro oculto" style="margin-top:14px"></div>
+          <div style="margin-top:18px">
+            <div class="chips" id="lista-ind"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h2>Dias que prefiro (ou prefiro evitar)</h2>
+        <div class="conteudo">
+          <div class="form-linha">
+            <div class="form-campo" style="max-width:130px">
+              <label for="pref-tipo">Eu</label>
+              <select id="pref-tipo">
+                <option value="evita">prefiro evitar</option>
+                <option value="quer">prefiro pegar</option>
+              </select>
+            </div>
+            <div class="form-campo">
+              <label for="pref-quando">Quando</label>
+              <select id="pref-quando" onchange="alternarPreferencia()">
+                <option value="semana">todo(a)…</option>
+                <option value="data">uma data específica</option>
+              </select>
+            </div>
+            <div class="form-campo" id="campo-pref-semana">
+              <label for="pref-dia">Dia da semana</label>
+              <select id="pref-dia">
+                <option value="0">segunda-feira</option>
+                <option value="1">terça-feira</option>
+                <option value="2">quarta-feira</option>
+                <option value="3">quinta-feira</option>
+                <option value="4">sexta-feira</option>
+                <option value="5">sábado</option>
+                <option value="6">domingo</option>
+              </select>
+            </div>
+            <div class="form-campo oculto" id="campo-pref-data">
+              <label for="pref-data">Data</label>
+              <input id="pref-data" type="date">
+            </div>
+            <button class="btn btn-primario" onclick="salvarPreferencia()">
+              Adicionar
+            </button>
+          </div>
+          <p class="dica">
+            Preferências são atendidas sempre que possível, mas cedem lugar ao
+            equilíbrio da escala. É o último critério do algoritmo.
+          </p>
+          <div id="erro-pref" class="aviso aviso-erro oculto" style="margin-top:14px"></div>
+          <div style="margin-top:18px">
+            <div class="chips" id="lista-pref"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trocas empilhadas abaixo: dependem das datas informadas acima, e
+         ficam na mesma rolagem em vez de escondidas atrás de uma aba. -->
+    <div class="separador-secao">
+      <span>Trocas de plantão</span>
+      <span id="selo-sub-trocas" class="selo oculto">0</span>
+    </div>
+
+
+
+    <div class="cartao oculto" id="cartao-pedir" style="margin-bottom:20px">
+      <h2>Pedir uma troca</h2>
+      <div class="conteudo">
+        <div class="form-linha">
+          <div class="form-campo">
+            <label for="troca-meu">Meu plantão</label>
+            <select id="troca-meu" onchange="atualizarOpcoesTroca()"></select>
+          </div>
+          <div class="form-campo">
+            <label for="troca-quero">Quero em troca</label>
+            <select id="troca-quero">
+              <option value="">Nada — só quero passar o meu (cessão)</option>
+            </select>
+          </div>
+          <div class="form-campo">
+            <label for="troca-motivo">Motivo (opcional)</label>
+            <input id="troca-motivo" type="text" placeholder="Ex.: compromisso familiar">
+          </div>
+          <button class="btn btn-primario" onclick="pedirTroca()">Pedir</button>
+        </div>
+        <p class="dica">
+          Só é possível trocar plantões de escala já publicada e que ainda não
+          aconteceram. Depois de alguém aceitar, o supervisor aprova — e o
+          sistema confere se a troca não quebra nenhuma regra obrigatória.
+        </p>
+        <div id="erro-troca" class="aviso aviso-erro oculto" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    <div class="cartao">
+      <h2 id="titulo-trocas">Pedidos</h2>
+      <div class="conteudo" id="lista-trocas"></div>
+    </div>
+  </div>
+
+  <!-- ============================================ VISTA: CONFIGURAÇÕES -->
+  <div class="vista oculto" id="vista-config">
+    <h2 class="titulo-pagina">Configurações do sistema</h2>
+    <div class="sub-abas">
+      <button class="sub-aba ativa" data-sub="equipe"
+              onclick="irSub('config','equipe')">Equipe</button>
+      <button class="sub-aba" data-sub="gerar"
+              onclick="irSub('config','gerar')">Geração de escala</button>
+    </div>
+    <div class="painel-sub" data-painel="equipe">
+
+    <div class="coluna-dupla coluna-equipe">
+      <div class="cartao">
+        <h2 id="titulo-form">Cadastrar pessoa</h2>
+        <div class="conteudo">
+          <div class="form-campo" style="margin-bottom:12px">
+            <label for="novo-nome">Nome completo</label>
+            <input id="novo-nome" type="text" placeholder="Ex.: João Batista da Silva">
+          </div>
+          <div class="form-linha" style="margin-bottom:12px;gap:10px">
+            <div class="form-campo">
+              <label for="novo-curto">Como é chamado</label>
+              <input id="novo-curto" type="text" placeholder="Ex.: Sd. Silva">
+            </div>
+            <div class="form-campo">
+              <label for="novo-fone">Telefone</label>
+              <input id="novo-fone" type="tel" placeholder="(49) 99999-0000">
+            </div>
+          </div>
+          <div class="form-campo" style="margin-bottom:12px">
+            <label for="novo-email">E-mail (será o login)</label>
+            <input id="novo-email" type="email" placeholder="joao.silva@cb.sc.gov.br">
+          </div>
+          <div class="form-campo" style="margin-bottom:16px">
+            <label for="novo-papel">Perfil</label>
+            <select id="novo-papel">
+              <option value="bombeiro">Bombeiro</option>
+              <option value="supervisor">Supervisor</option>
+              <option value="administrador">Administrador</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primario" style="flex:1" id="btn-salvar-pessoa"
+                    onclick="salvarPessoa()">Cadastrar</button>
+            <button class="btn oculto" id="btn-cancelar-edicao"
+                    onclick="cancelarEdicao()">Cancelar</button>
+          </div>
+          <p class="dica" id="dica-form">
+            O sistema gera uma senha e mostra aqui uma única vez. Entregue ao
+            usuário — ele escolhe a própria senha no primeiro acesso.
+          </p>
+          <div id="erro-cad" class="aviso aviso-erro oculto" style="margin-top:14px"></div>
+          <div id="credencial" class="credencial oculto"></div>
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h2>Equipe cadastrada</h2>
+        <div class="tabela-rolavel">
+          <table>
+            <thead><tr>
+              <th>Nome</th><th>Perfil</th><th>Situação</th><th style="text-align:right">Ações</th>
+            </tr></thead>
+            <tbody id="lista-equipe"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    </div>
+    <div class="painel-sub oculto" data-painel="gerar">
+
+    <div class="coluna-tripla">
+      <div class="cartao">
+        <h2>Parâmetros</h2>
+        <div class="conteudo">
+          <div class="form-campo" style="margin-bottom:14px">
+            <label for="ger-mes">Mês de referência</label>
+            <select id="ger-mes"></select>
+          </div>
+          <div class="form-campo" style="margin-bottom:14px">
+            <label for="ger-descanso">Folga obrigatória entre plantões (dias)</label>
+            <input id="ger-descanso" type="number" min="0" max="6">
+            <p class="dica" style="margin:6px 0 0">
+              Regra que nunca cede. Com 1, ninguém emenda dois dias seguidos.
+            </p>
+          </div>
+          <div class="form-campo" style="margin-bottom:14px">
+            <label for="ger-desejavel">Folga desejável (dias)</label>
+            <input id="ger-desejavel" type="number" min="0" max="10">
+            <p class="dica" style="margin:6px 0 0">
+              Espaçamento buscado quando há folga para isso. Cede se preciso.
+            </p>
+          </div>
+          <div class="form-campo">
+            <label for="ger-duracao">Duração do plantão (horas)</label>
+            <input id="ger-duracao" type="number" min="1" max="48">
+            <p class="dica" style="margin:6px 0 0">
+              Usada para converter plantões em carga horária nos relatórios.
+            </p>
+          </div>
+          <button class="btn btn-primario" style="width:100%;margin-top:18px"
+                  onclick="salvarParametros()">Salvar parâmetros</button>
+          <div id="erro-param" class="aviso aviso-erro oculto" style="margin-top:14px"></div>
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h2>Regras aplicadas</h2>
+        <div class="conteudo">
+          <p class="dica" style="margin:0 0 14px">
+            Estas não são opções: são as regras que o motor sempre respeita.
+            Estão aqui para você conferir o que está valendo.
+          </p>
+          <div class="regra"><span class="marca-regra fixa">sempre</span>
+            Todo dia tem exatamente um bombeiro escalado</div>
+          <div class="regra"><span class="marca-regra fixa">sempre</span>
+            Ninguém escalado em férias, licença, atestado ou afastamento</div>
+          <div class="regra"><span class="marca-regra fixa">sempre</span>
+            Folga obrigatória respeitada, inclusive na virada do mês</div>
+          <div class="regra"><span class="marca-regra fixa">sempre</span>
+            Plantões travados e dias já decorridos preservados</div>
+          <p class="dica" style="margin:16px 0 8px">
+            Depois disso, o motor otimiza nesta ordem — cada critério só entra
+            quando o anterior chegou ao melhor possível:
+          </p>
+          <div class="regra"><span class="marca-regra ordem">1</span> Espaçamento entre plantões</div>
+          <div class="regra"><span class="marca-regra ordem">2</span> Carga total acumulada</div>
+          <div class="regra"><span class="marca-regra ordem">3</span> Escala branca</div>
+          <div class="regra"><span class="marca-regra ordem">4</span> Escala vermelha</div>
+          <div class="regra"><span class="marca-regra ordem">5</span> Sábados, domingos e feriados</div>
+          <div class="regra"><span class="marca-regra ordem">6</span> Preferências pessoais</div>
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h2>Resultado</h2>
+        <div class="conteudo" id="ger-resultado">
+          <p class="dica">Gere a escala para ver os números deste mês.</p>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <p class="rodape">
+    Escalas BM — sistema de escalas para corpo de bombeiros.
+  </p>
+</main>
+  </div><!-- conteudo-principal -->
+</div><!-- quadro -->
+<div class="veu-lateral oculto" id="veu-lateral" onclick="alternarLateral()"></div>
+</div>
+
+<script>
+const API = '';
+// A sessão vive no localStorage para sobreviver ao F5. O token JWT já tem
+// validade própria (8h) e é revalidado a cada carregamento — se estiver
+// vencido ou inválido, cai na tela de login e o resto é apagado.
+const CHAVE_SESSAO = 'escalas.sessao';
+let token = null, papel = '', nome = '';
+// Abre no mês corrente. Estava fixo em setembro de 2026, o que fazia o
+// sistema abrir num mês sem escala e parecer vazio.
+const _hoje = new Date();
+const hojeReal = new Date();
+const HOJE = _hoje;
+let ano = _hoje.getFullYear(), mes = _hoje.getMonth() + 1;
+let escala = null, estagios = [];
+let meuId = null, vista = 'escala', equipe = [], editandoId = null;
+
+const TIPOS_IND = {ferias:'Férias', atestado:'Atestado',
+                   licenca:'Licença', afastamento:'Afastamento'};
+const NOMES_DIA = ['segundas','terças','quartas','quintas','sextas',
+                   'sábados','domingos'];
+
+const MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho',
+  'agosto','setembro','outubro','novembro','dezembro'];
+const DIAS_SEMANA = ['domingo','segunda','terça','quarta','quinta','sexta','sábado'];
+
+/* -------------------------------------------------------------- infra -- */
+async function chamar(rota, opcoes = {}) {
+  const cabecalhos = Object.assign({}, opcoes.headers || {});
+  if (token) cabecalhos['Authorization'] = 'Bearer ' + token;
+  if (opcoes.body && !cabecalhos['Content-Type'])
+    cabecalhos['Content-Type'] = 'application/json';
+  const resposta = await fetch(API + rota, Object.assign({}, opcoes, {headers: cabecalhos}));
+  const corpo = await resposta.json().catch(() => ({}));
+  if (resposta.status === 401 && token && rota !== '/auth/eu') {
+    // Sessão expirou durante o uso: volta ao login em vez de falhar em silêncio.
+    limparSessao();
+    location.reload();
+  }
+  if (!resposta.ok) throw Object.assign(new Error('falha'), {status: resposta.status, corpo});
+  return corpo;
+}
+
+function mostrar(tipo, titulo, texto, itens) {
+  const lista = itens && itens.length
+    ? '<ul>' + itens.map(i => '<li>' + escapar(i) + '</li>').join('') + '</ul>' : '';
+  document.getElementById('mensagem').innerHTML =
+    `<div class="aviso aviso-${tipo}"><div><b>${escapar(titulo)}</b>${escapar(texto || '')}${lista}</div></div>`;
+}
+function limparMensagem(){ document.getElementById('mensagem').innerHTML = ''; }
+function escapar(t){ const d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML; }
+
+/* ------------------------------------------------------------- sessão -- */
+function guardarSessao() {
+  try {
+    localStorage.setItem(CHAVE_SESSAO, JSON.stringify({token, papel, nome}));
+  } catch (e) { /* modo privado pode bloquear; a sessão só não persiste */ }
+}
+
+function limparSessao() {
+  token = null; papel = ''; nome = '';
+  try { localStorage.removeItem(CHAVE_SESSAO); } catch (e) { }
+}
+
+function sair() {
+  limparSessao();
+  location.reload();
+}
+
+/** Tenta retomar a sessão guardada. Só entra se o servidor confirmar. */
+async function retomarSessao() {
+  let guardada = null;
+  try { guardada = JSON.parse(localStorage.getItem(CHAVE_SESSAO) || 'null'); }
+  catch (e) { guardada = null; }
+  if (!guardada || !guardada.token) return false;
+
+  token = guardada.token; papel = guardada.papel; nome = guardada.nome;
+  try {
+    // O servidor é quem decide: token vencido ou usuário desativado cai fora.
+    const eu = await chamar('/auth/eu');
+    papel = eu.papel; nome = eu.nome;
+    guardarSessao();
+    document.getElementById('tela-login').classList.add('oculto');
+    await abrirApp();
+    return true;
+  } catch (e) {
+    limparSessao();
+    return false;
+  }
+}
+
+/* -------------------------------------------------------------- login -- */
+async function entrar() {
+  const corpo = new URLSearchParams({
+    username: document.getElementById('email').value,
+    password: document.getElementById('senha').value
+  });
+  try {
+    const dados = await chamar('/auth/login', {
+      method: 'POST', body: corpo,
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'}
+    });
+    token = dados.access_token; papel = dados.papel; nome = dados.nome;
+    guardarSessao();
+    document.getElementById('tela-login').classList.add('oculto');
+    if (dados.precisa_trocar_senha) {
+      document.getElementById('tela-senha').classList.remove('oculto');
+      document.getElementById('senha-nova').focus();
+      return;
+    }
+    abrirApp();
+  } catch (e) {
+    const caixa = document.getElementById('erro-login');
+    caixa.textContent = e.corpo && e.corpo.detail ? e.corpo.detail : 'Não foi possível entrar.';
+    caixa.classList.remove('oculto');
+  }
+}
+
+async function alternarLateral() {
+  const lateral = document.getElementById('lateral');
+  const veu = document.getElementById('veu-lateral');
+  const abrindo = !lateral.classList.contains('aberta');
+  lateral.classList.toggle('aberta', abrindo);
+  veu.classList.toggle('oculto', !abrindo);
+}
+
+function fecharLateralNoCelular() {
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    document.getElementById('lateral').classList.remove('aberta');
+    document.getElementById('veu-lateral').classList.add('oculto');
+  }
+}
+
+function iniciais(nome) {
+  const partes = (nome || '').trim().split(/\s+/).filter(Boolean);
+  if (!partes.length) return '?';
+  return (partes[0][0] + (partes.length > 1 ? partes[partes.length - 1][0] : ''))
+    .toUpperCase();
+}
+
+async function abrirApp() {
+  document.getElementById('app').classList.remove('oculto');
+  document.getElementById('quem').textContent = nome;
+  document.getElementById('quem').title = nome;
+  document.getElementById('quem-papel').textContent = papel;
+  document.getElementById('avatar').textContent = iniciais(nome);
+
+  const gerencia = papel === 'supervisor' || papel === 'administrador';
+  ['btn-gerar', 'btn-publicar'].forEach(id => {
+    document.getElementById(id).classList.toggle('oculto', !gerencia);
+  });
+  // A aba Equipe só existe para quem pode cadastrar.
+  // "Equipe" e "Gerar escala" viraram sub-abas de Configurações; a busca por
+  // elas devolvia null e interrompia o resto da função em silêncio.
+  ['config', 'relatorios'].forEach(vista => {
+    const aba = document.querySelector(`[data-vista="${vista}"]`);
+    if (aba) aba.classList.toggle('oculto', !gerencia);
+  });
+  document.getElementById('seletor-bombeiro').classList.toggle('oculto', !gerencia);
+  document.querySelector('[data-rotulo-datas]').textContent = 'Datas';
+  document.getElementById('titulo-datas').textContent =
+    gerencia ? 'Datas da equipe' : 'Minhas datas';
+
+  try { meuId = (await chamar('/auth/eu')).id; } catch (e) { meuId = null; }
+  document.getElementById('cartao-pedir').classList.toggle('oculto', papel !== 'bombeiro');
+  document.getElementById('titulo-trocas').textContent =
+    gerencia ? 'Pedidos de troca da equipe' : 'Meus pedidos e pedidos em aberto';
+  atualizarSeloTrocas();
+  carregarPendencias();
+  // "Só os meus" só faz sentido para quem entra em escala.
+  document.getElementById('rotulo-meus').classList.toggle('oculto', papel !== 'bombeiro');
+  await carregarEquipe();
+  carregar();
+}
+
+/* --------------------------------------------------------- navegação --- */
+/* Sub-abas das páginas unidas. A navegação principal ficou com quatro itens,
+   mas cada função continua com espaço próprio dentro da página. */
+function irSub(vista, painel) {
+  const raiz = document.getElementById('vista-' + vista);
+  raiz.querySelectorAll('.painel-sub').forEach(el =>
+    el.classList.toggle('oculto', el.dataset.painel !== painel));
+  raiz.querySelectorAll('.sub-aba').forEach(el =>
+    el.classList.toggle('ativa', el.dataset.sub === painel));
+
+  if (vista === 'config' && painel === 'equipe') desenharEquipe();
+  if (vista === 'config' && painel === 'gerar') prepararGeracao();
+}
+
+function irPara(destino) {
+  vista = destino;
+  document.querySelectorAll('.vista').forEach(v =>
+    v.classList.toggle('oculto', v.id !== 'vista-' + destino));
+  document.querySelectorAll('.aba').forEach(a =>
+    a.classList.toggle('ativa', a.dataset.vista === destino));
+  const acoes = papel === 'supervisor' || papel === 'administrador';
+  ['btn-gerar', 'btn-publicar'].forEach(id => {
+    document.getElementById(id).classList.toggle(
+      'oculto', !acoes || !(destino === 'escala' || destino === 'config'));
+  });
+  atualizarBarraMes();
+  limparMensagem();
+  fecharLateralNoCelular();
+  if (destino === 'datas') {
+    // As duas seções ficam empilhadas na mesma rolagem.
+    carregarDatas();
+    carregarTrocas();
+  }
+  if (destino === 'config') {
+    const ativo = document.querySelector('#vista-config .sub-aba.ativa');
+    irSub('config', ativo ? ativo.dataset.sub : 'equipe');
+  }
+  if (destino === 'relatorios') prepararRelatorios();
+}
+
+/* ------------------------------------------------------------ carregar -- */
+function mudarMes(passo) {
+  mes += passo;
+  if (mes > 12) { mes = 1; ano++; }
+  if (mes < 1)  { mes = 12; ano--; }
+  carregar();
+}
+
+async function carregar() {
+  document.getElementById('titulo-mes').textContent =
+    MESES[mes - 1].replace(/^./, c => c.toUpperCase()) + ' de ' + ano;
+  limparMensagem();
+  escala = null; estagios = [];
+
+  try {
+    escala = await chamar(`/escalas/${ano}/${mes}`);
+    estagios = (escala.estagios || []).map(e => ({
+      codigo: e.codigo, descricao: e.descricao,
+      valor_legivel: e.legivel || e.valor_legivel
+    }));
+    if (escala.resumo) {
+      mostrar(escala.status === 'publicada' ? 'ok' : 'info',
+        escala.status === 'publicada'
+          ? `Publicada — versão ${escala.versao}`
+          : `Rascunho — versão ${escala.versao}`,
+        escala.resumo);
+    }
+  } catch (e) {
+    if (e.status === 404) {
+      mostrar('info', 'Nenhuma escala para este mês',
+        'Use "Gerar escala" para criar a primeira versão.');
+    } else {
+      mostrar('erro', 'Não foi possível carregar a escala', '');
+    }
+  }
+  desenharCalendario();
+  desenharTabela();
+  carregarEquidade();
+  desenharEstagios();
+  atualizarBarraMes();
+}
+
+/* ---------------------------------------------------------- calendário -- */
+function desenharCalendario() {
+  const grade = document.getElementById('calendario');
+  const primeiro = new Date(ano, mes - 1, 1).getDay();
+  const total = new Date(ano, mes, 0).getDate();
+  const porDia = {};
+  if (escala) escala.plantoes.forEach(p => { porDia[p.data.slice(8)] = p; });
+
+  let html = '';
+  for (let i = 0; i < primeiro; i++) html += '<div class="dia vazio"></div>';
+  for (let d = 1; d <= total; d++) {
+    const chave = String(d).padStart(2, '0');
+    const p = porDia[chave];
+    const classes = ['dia'];
+    if (p && p.tipo === 'vermelha') classes.push('vermelha');
+    if (p && p.feriado) classes.push('feriado');
+    if (p && meuId && p.bombeiro_id === meuId) classes.push('meu');
+    // A primeira pergunta do dia é "quem está de plantão AGORA". Sem marcar,
+    // o supervisor precisa procurar a data no calendário.
+    if (ano === hojeReal.getFullYear() && mes === hojeReal.getMonth() + 1
+        && d === hojeReal.getDate()) classes.push('hoje');
+    // O supervisor abre o sistema de manhã para saber quem está de serviço
+    // AGORA. Sem marca, ele precisa procurar a data no calendário.
+    const eHoje = ano === HOJE.getFullYear() && mes === HOJE.getMonth() + 1
+                  && d === HOJE.getDate();
+    if (eHoje) classes.push('hoje');
+    html += `<button class="${classes.join(' ')}" onclick="abrirDia(${d})"
+              aria-label="Dia ${d}${p ? ', ' + p.bombeiro : ''}">
+        <div class="topo-dia">
+          <span class="num">${d}</span>
+          ${eHoje ? '<span class="etiqueta-hoje">hoje</span>' : ''}
+          ${p && meuId && p.bombeiro_id === meuId ? '<span class="etiqueta-meu">meu</span>' : ''}
+        </div>
+        ${p ? `<div class="quem" title="${escapar(p.bombeiro)}">${
+            escapar(p.bombeiro_curto || p.bombeiro)}</div>` : ''}
+        ${p && p.feriado ? `<div class="tag">${escapar(p.feriado)}</div>` : ''}
+        ${p && p.travado ? '<div class="tag travado">Travado</div>' : ''}
+      </button>`;
+  }
+  grade.innerHTML = html;
+}
+
+/* -------------------------------------------------------------- tabela -- */
+function desenharTabela() {
+  const corpo = document.getElementById('tabela');
+  if (!escala) {
+    corpo.innerHTML = `<tr><td colspan="5"><div class="vazio-estado">
+      <b>Sem escala para este mês</b>Gere a escala para ver a tabela.</div></td></tr>`;
+    return;
+  }
+  const filtro = document.getElementById('busca').value.toLowerCase();
+  const soMeus = document.getElementById('so-meus').checked;
+  const linhas = escala.plantoes.filter(p => {
+    if (soMeus && p.bombeiro_id !== meuId) return false;
+    return !filtro ||
+      (p.bombeiro + ' ' + p.data + ' ' + p.tipo).toLowerCase().includes(filtro);
+  });
+
+  if (!linhas.length) {
+    const motivo = soMeus
+      ? 'Você não tem plantão neste mês.'
+      : 'Ajuste o filtro para ver outros plantões.';
+    corpo.innerHTML = `<tr><td colspan="5"><div class="vazio-estado">
+      <b>Nada encontrado</b>${motivo}</div></td></tr>`;
+    return;
+  }
+  corpo.innerHTML = linhas.map(p => {
+    const data = new Date(p.data + 'T12:00:00');
+    const obs = [];
+    if (p.feriado) obs.push(p.feriado);
+    if (p.travado) obs.push('<span class="pilula travado">Travado</span>');
+    if (p.origem === 'manual') obs.push('ajuste do supervisor');
+    if (p.origem === 'troca') obs.push('troca aprovada');
+    return `<tr class="${meuId && p.bombeiro_id === meuId ? 'meu' : ''}">
+      <td class="mono" data-rotulo="Data">${data.toLocaleDateString('pt-BR')}</td>
+      <td data-rotulo="Dia">${DIAS_SEMANA[data.getDay()]}</td>
+      <td data-rotulo="Tipo"><span class="pilula ${p.tipo}">${p.tipo}</span></td>
+      <td data-rotulo="Bombeiro" title="${escapar(p.bombeiro)}">${
+        escapar(p.bombeiro_curto || p.bombeiro)}</td>
+      <td data-rotulo="Observações">${obs.join(' · ')}</td>
+    </tr>`;
+  }).join('');
+}
+
+/* PDF serve para o mural e Excel para o arquivo, mas o canal real do quartel é
+   o grupo de mensagens. Sem isto, o supervisor baixa o PDF e anexa — ou digita
+   a escala à mão. */
+async function copiarParaGrupo() {
+  if (!escala) {
+    mostrar('alerta', 'Nada para copiar', 'Gere a escala deste mês primeiro.');
+    return;
+  }
+  const cabecalho = `*ESCALA ${MESES[mes - 1].toUpperCase()} ${ano}*` +
+    (escala.status === 'publicada' ? '' : ' _(rascunho)_');
+
+  const linhas = escala.plantoes.map(p => {
+    const d = new Date(p.data + 'T12:00:00');
+    const dia = String(d.getDate()).padStart(2, '0');
+    const semana = DIAS_SEMANA[d.getDay()].slice(0, 3);
+    const marca = p.tipo === 'vermelha' ? ' 🔴' : '';
+    const feriado = p.feriado ? ` (${p.feriado})` : '';
+    return `${dia}/${String(mes).padStart(2, '0')} ${semana} — ${
+      p.bombeiro_curto || p.bombeiro}${marca}${feriado}`;
+  });
+
+  const contagem = {};
+  escala.plantoes.forEach(p => {
+    const n = p.bombeiro_curto || p.bombeiro;
+    contagem[n] = (contagem[n] || 0) + 1;
+  });
+  const resumo = Object.entries(contagem)
+    .sort((a, b) => b[1] - a[1])
+    .map(([n, q]) => `${n}: ${q}`).join(' · ');
+
+  const texto = [cabecalho, '', ...linhas, '',
+    `_Plantões: ${resumo}_`,
+    '_🔴 fim de semana ou feriado_'].join('\n');
+
+  try {
+    await navigator.clipboard.writeText(texto);
+    mostrar('ok', 'Escala copiada',
+      'Cole no grupo. Os fins de semana vêm marcados e o total por pessoa vai no fim.');
+  } catch (e) {
+    // Área de transferência bloqueada (contexto não seguro): mostra para copiar à mão.
+    await perguntar({
+      titulo: 'Copiar escala',
+      texto: 'Selecione o texto abaixo e copie:',
+      rotuloCampo: 'Escala em texto',
+      valor: texto.replace(/\n/g, ' | '),
+      botao: 'Fechar'
+    });
+  }
+}
+
+async function exportar(formato) {
+  if (!escala) {
+    mostrar('alerta', 'Nada para exportar', 'Gere a escala deste mês primeiro.');
+    return;
+  }
+  // Gerado no servidor: o navegador não controla largura de coluna nem
+  // codificação de arquivo, que era o que quebrava o CSV no Excel.
+  try {
+    const resposta = await fetch(
+      API + `/escalas/${ano}/${mes}/exportar/${formato}`,
+      {headers: {'Authorization': 'Bearer ' + token}});
+    if (!resposta.ok) throw new Error('falha');
+    const blob = await resposta.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `escala-${ano}-${String(mes).padStart(2, '0')}.${formato}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    mostrar('erro', 'Não foi possível exportar',
+      'Tente novamente em instantes.');
+  }
+}
+
+/* -------------------------------------------- saldo de equidade (assinatura) */
+async function carregarEquidade() {
+  const alvo = document.getElementById('equidade');
+  try {
+    const dados = await chamar(`/equidade?ano=${ano}&mes=${mes}`);
+
+    // Sem escala publicada anterior, o saldo é zero para todos — não é erro,
+    // é o ponto de partida. Explicar em vez de mostrar uma lista de zeros.
+    if (!dados.escalas_publicadas) {
+      alvo.innerHTML = `<div class="vazio-estado" style="padding:24px 0">
+        <b>O saldo começa do zero</b>
+        Nenhuma escala foi publicada ainda. A partir da primeira publicação,
+        este painel mostra quem trabalhou acima ou abaixo da parcela justa —
+        e o motor usa isso para equilibrar os meses seguintes.
+      </div>`;
+      return;
+    }
+
+    const anterior = mes === 1
+      ? `${MESES[11]} de ${ano - 1}`
+      : `${MESES[mes - 2]} de ${ano}`;
+    const cabecalho = `<p class="legenda" style="margin:0 0 14px">
+      Acumulado até <b>${anterior}</b> — é este saldo que o motor usou para
+      montar ${MESES[mes - 1]}. Escalas em rascunho não entram na conta.
+    </p>`;
+
+    const maior = Math.max(1, ...dados.bombeiros.map(b => Math.abs(b.saldos.total || 0)));
+    alvo.innerHTML = cabecalho + dados.bombeiros.map(b => {
+      const v = b.saldos.total || 0;
+      const largura = (Math.abs(v) / maior) * 50;
+      const barra = v >= 0
+        ? `<i class="mais" style="width:${largura}%"></i>`
+        : `<i class="menos" style="width:${largura}%"></i>`;
+      return `<div class="saldo-linha clicavel"
+          onclick="abrirExtrato(${b.bombeiro_id}, '${escapar(b.nome).replace(/'/g, "\\'")}')"
+          title="Ver o extrato de ${escapar(b.nome)}">
+        <div class="saldo-topo"><b>${escapar(b.nome)}</b>
+          <span class="mono">${v > 0 ? '+' : ''}${v.toFixed(2)}</span></div>
+        <div class="barra"><div class="zero"></div>${barra}</div>
+      </div>`;
+    }).join('') + `<p class="legenda">
+      Acima de zero (laranja) = trabalhou além da parcela justa; abaixo
+      (escuro) = aquém. O cálculo é proporcional à disponibilidade, então férias e licenças
+      não viram déficit. O motor usa este saldo para equilibrar os próximos meses.
+    </p>`;
+  } catch (e) {
+    alvo.innerHTML = '<p class="legenda">Saldo indisponível.</p>';
+  }
+}
+
+function desenharEstagios() {
+  const alvo = document.getElementById('estagios');
+  if (!estagios.length) {
+    alvo.innerHTML = `<li><span>Gere a escala para ver os critérios aplicados.</span></li>`;
+    return;
+  }
+  alvo.innerHTML = estagios.map(e =>
+    `<li><span>${escapar(e.descricao)}</span>
+         <span class="mono">${escapar(e.valor_legivel)}</span></li>`).join('');
+}
+
+/* ------------------------------------------------------------- ações --- */
+async function gerar() {
+  // Se o supervisor escolheu outro mês na tela de geração, respeita a escolha.
+  const seletor = document.getElementById('ger-mes');
+  if (vista === 'gerar' && seletor && seletor.value) {
+    const [a, m] = seletor.value.split('-').map(Number);
+    if (a !== ano || m !== mes) { ano = a; mes = m; await carregar(); }
+  }
+  const botao = document.getElementById('btn-gerar');
+  botao.disabled = true; botao.textContent = 'Gerando…';
+  mostrar('info', 'Gerando a escala', 'O motor está avaliando as combinações possíveis.');
+  try {
+    const {job_id} = await chamar('/escalas/gerar', {
+      method: 'POST', body: JSON.stringify({ano, mes})});
+
+    // Polling — a geração leva segundos; não há broker nem WebSocket.
+    for (let tentativa = 0; tentativa < 120; tentativa++) {
+      await new Promise(r => setTimeout(r, 500));
+      const job = await chamar('/jobs/' + job_id);
+      if (job.status === 'concluido') {
+        const r = job.resultado;
+        if (!r.viavel) {
+          mostrarSemSolucao(r.conflitos);
+          escala = null; estagios = [];
+          desenharCalendario(); desenharTabela(); desenharEstagios();
+          return;
+        }
+        await carregar();
+        if (vista === 'gerar') desenharResultadoGeracao();
+        mostrar('ok', `Escala gerada — versão ${r.versao}`, r.resumo);
+        return;
+      }
+      if (job.status === 'falhou') {
+        mostrar('erro', 'A geração falhou', job.erro || 'Erro desconhecido.');
+        return;
+      }
+    }
+    mostrar('alerta', 'A geração está demorando', 'Atualize a página em instantes.');
+  } catch (e) {
+    mostrar('erro', 'Não foi possível gerar',
+      e.corpo && e.corpo.detail ? JSON.stringify(e.corpo.detail) : '');
+  } finally {
+    botao.disabled = false; botao.textContent = 'Gerar escala';
+  }
+}
+
+async function publicar() {
+  if (!escala) { mostrar('alerta', 'Nada para publicar', 'Gere uma escala primeiro.'); return; }
+  if (escala.status === 'publicada') {
+    mostrar('info', 'Esta versão já está publicada', ''); return;
+  }
+  try {
+    await chamar(`/escalas/${escala.id}/publicar`, {method: 'POST'});
+    await carregar();
+    mostrar('ok', 'Escala publicada', 'Os bombeiros já veem esta versão.');
+  } catch (e) {
+    mostrar('erro', 'Não foi possível publicar', '');
+  }
+}
+
+async function explicar(dia) {
+  if (!escala) return;
+  try {
+    const r = await chamar(`/escalas/${ano}/${mes}/explicacao/${dia}`);
+    mostrar('info', `Por que este bombeiro no dia ${dia}?`, r.texto);
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  } catch (e) {
+    mostrar('alerta', 'Sem explicação disponível',
+      'A explicação é calculada sobre a escala vigente.');
+  }
+}
+
+async function salvarSenha() {
+  const nova = document.getElementById('senha-nova').value;
+  const conf = document.getElementById('senha-conf').value;
+  const caixa = document.getElementById('erro-senha');
+  caixa.classList.add('oculto');
+
+  if (nova.length < 8) {
+    caixa.textContent = 'A senha precisa ter ao menos 8 caracteres.';
+    caixa.classList.remove('oculto'); return;
+  }
+  if (nova !== conf) {
+    caixa.textContent = 'As duas senhas não são iguais.';
+    caixa.classList.remove('oculto'); return;
+  }
+  try {
+    await chamar('/auth/trocar-senha', {
+      method: 'POST',
+      body: JSON.stringify({
+        senha_atual: document.getElementById('senha').value,
+        senha_nova: nova
+      })
+    });
+    document.getElementById('tela-senha').classList.add('oculto');
+    abrirApp();
+  } catch (e) {
+    caixa.textContent = e.corpo && e.corpo.detail
+      ? (typeof e.corpo.detail === 'string' ? e.corpo.detail : 'Não foi possível trocar a senha.')
+      : 'Não foi possível trocar a senha.';
+    caixa.classList.remove('oculto');
+  }
+}
+
+/* ============================================ EQUIPE (admin/supervisor) == */
+async function carregarEquipe() {
+  try {
+    equipe = await chamar('/usuarios');
+  } catch (e) { equipe = []; }
+  // Supervisor enxerga todas; bombeiro só as próprias — e aí a etiqueta dos
+  // colegas cai em "disponível", que é o certo: ele não deve ver o motivo.
+  try {
+    window._ausenciasHoje = await chamar('/indisponibilidades');
+  } catch (e) { window._ausenciasHoje = []; }
+
+  const seletor = document.getElementById('alvo-bombeiro');
+  const bombeiros = equipe.filter(u => u.papel === 'bombeiro' && u.ativo);
+  seletor.innerHTML = bombeiros.map(b =>
+    `<option value="${b.id}">${escapar(b.nome)}</option>`).join('');
+  if (meuId && bombeiros.some(b => b.id === meuId)) seletor.value = meuId;
+}
+
+function alvoAtual() {
+  const gerencia = papel === 'supervisor' || papel === 'administrador';
+  if (!gerencia) return meuId;
+  const v = document.getElementById('alvo-bombeiro').value;
+  return v ? parseInt(v, 10) : meuId;
+}
+
+/* Situação de HOJE, não só ativo/inativo: o supervisor precisa saber quem
+   está de férias agora, e isso está nas indisponibilidades, não no cadastro. */
+function etiquetaDisponibilidade(u) {
+  if (!u.ativo) {
+    return '<span class="pilula" style="background:var(--superficie-2);' +
+           'color:var(--tinta-3)">inativo</span>';
+  }
+  const hoje = new Date().toISOString().slice(0, 10);
+  const fora = (window._ausenciasHoje || []).find(
+    i => i.bombeiro_id === u.id && i.inicio <= hoje && i.fim >= hoje);
+  if (fora) {
+    return `<span class="pilula ${escapar(fora.tipo)}">${
+      escapar(TIPOS_IND[fora.tipo] || fora.tipo)}</span>`;
+  }
+  return '<span class="pilula" style="background:var(--verde-suave);' +
+         'color:#0d652d">disponível</span>';
+}
+
+function desenharEquipe() {
+  const corpo = document.getElementById('lista-equipe');
+  if (!equipe.length) {
+    corpo.innerHTML = `<tr><td colspan="4"><div class="vazio-estado">
+      <b>Ninguém cadastrado ainda</b>Cadastre a primeira pessoa ao lado.</div></td></tr>`;
+    return;
+  }
+  corpo.innerHTML = equipe.map(u => {
+    const eu = u.id === meuId;
+    const acoes = eu
+      ? '<span class="dica">sua conta</span>'
+      : `<button class="mini" onclick="editarPessoa(${u.id})">Editar</button>
+         <button class="mini" onclick="redefinirSenha(${u.id})">Nova senha</button>
+         <button class="mini" onclick="alternarAtivo(${u.id}, ${!u.ativo})">
+           ${u.ativo ? 'Desativar' : 'Reativar'}</button>
+         <button class="mini perigo" onclick="excluirPessoa(${u.id})">Excluir</button>`;
+    return `<tr class="${u.id === editandoId ? 'editando' : ''}">
+      <td data-rotulo="Nome"><div style="font-weight:500">${escapar(u.nome)}</div>
+          <div class="mono" style="font-size:11px;color:var(--tinta-3)">
+            ${u.telefone
+              ? `<a class="tel" href="tel:${escapar(u.telefone.replace(/\D/g, ''))}">${
+                  escapar(u.telefone)}</a> · ` : ''}${escapar(u.email)}</div></td>
+      <td data-rotulo="Perfil"><span class="pilula branca">${escapar(u.papel)}</span></td>
+      <td data-rotulo="Situação">${etiquetaDisponibilidade(u)}</td>
+      <td data-rotulo="Ações"><div class="acoes-linha">${acoes}</div></td>
+    </tr>`;
+  }).join('');
+}
+
+function editarPessoa(id) {
+  const u = equipe.find(x => x.id === id);
+  if (!u) return;
+  editandoId = id;
+  document.getElementById('novo-nome').value = u.nome;
+  document.getElementById('novo-email').value = u.email;
+  document.getElementById('novo-papel').value = u.papel;
+  document.getElementById('novo-curto').value = u.nome_curto || '';
+  document.getElementById('novo-fone').value = u.telefone || '';
+  document.getElementById('titulo-form').textContent = 'Editar ' + u.nome;
+  document.getElementById('btn-salvar-pessoa').textContent = 'Salvar alterações';
+  document.getElementById('btn-cancelar-edicao').classList.remove('oculto');
+  document.getElementById('dica-form').textContent =
+    'A senha não muda aqui. Para trocar, use "Nova senha" na tabela.';
+  document.getElementById('credencial').classList.add('oculto');
+  document.getElementById('erro-cad').classList.add('oculto');
+  desenharEquipe();
+  document.getElementById('novo-nome').focus();
+}
+
+function cancelarEdicao() {
+  editandoId = null;
+  document.getElementById('novo-nome').value = '';
+  document.getElementById('novo-email').value = '';
+  document.getElementById('novo-papel').value = 'bombeiro';
+  document.getElementById('novo-curto').value = '';
+  document.getElementById('novo-fone').value = '';
+  document.getElementById('titulo-form').textContent = 'Cadastrar pessoa';
+  document.getElementById('btn-salvar-pessoa').textContent = 'Cadastrar';
+  document.getElementById('btn-cancelar-edicao').classList.add('oculto');
+  document.getElementById('dica-form').textContent =
+    'O sistema gera uma senha e mostra aqui uma única vez. Entregue ao usuário — ' +
+    'ele escolhe a própria senha no primeiro acesso.';
+  document.getElementById('erro-cad').classList.add('oculto');
+  desenharEquipe();
+}
+
+async function redefinirSenha(id) {
+  const u = equipe.find(x => x.id === id);
+  const confirmou = await perguntar({
+    titulo: 'Gerar senha nova',
+    texto: `<b>${escapar(u.nome)}</b> vai receber uma senha temporária, e a
+            atual deixa de funcionar imediatamente. Ele escolhe a definitiva
+            no próximo acesso.`,
+    botao: 'Gerar senha'
+  });
+  if (confirmou === null) return;
+  try {
+    const r = await chamar('/usuarios/' + id + '/redefinir-senha', {method: 'POST'});
+    const cred = document.getElementById('credencial');
+    cred.innerHTML = `<b>Senha nova para ${escapar(r.nome)}</b>
+      Entregue estes dados. A senha aparece só desta vez.
+      <code>${escapar(r.email)}</code>
+      <code>${escapar(r.senha_inicial)}</code>`;
+    cred.classList.remove('oculto');
+  } catch (e) {
+    mostrar('erro', 'Não foi possível redefinir',
+      e.corpo && typeof e.corpo.detail === 'string' ? e.corpo.detail : '');
+  }
+}
+
+async function excluirPessoa(id) {
+  const u = equipe.find(x => x.id === id);
+  const confirmou = await perguntar({
+    titulo: 'Excluir cadastro',
+    texto: `Excluir <b>${escapar(u.nome)}</b> do sistema. Isso não pode ser
+            desfeito. Quem já cumpriu plantão não pode ser excluído — nesse
+            caso use <b>Desativar</b>.`,
+    botao: 'Excluir',
+    perigo: true
+  });
+  if (confirmou === null) return;
+  try {
+    const r = await chamar('/usuarios/' + id, {method: 'DELETE'});
+    await carregarEquipe();
+    desenharEquipe();
+    mostrar('ok', 'Cadastro excluído', r.mensagem || '');
+  } catch (e) {
+    const detalhe = e.corpo && typeof e.corpo.detail === 'string'
+      ? e.corpo.detail : 'Não foi possível excluir.';
+    // 409 = a pessoa tem histórico de plantões; o caminho é desativar.
+    mostrar(e.status === 409 ? 'alerta' : 'erro',
+      e.status === 409 ? 'Este cadastro não pode ser excluído' : 'Erro ao excluir',
+      detalhe);
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  }
+}
+
+async function salvarPessoa() {
+  const erro = document.getElementById('erro-cad');
+  const cred = document.getElementById('credencial');
+  erro.classList.add('oculto'); cred.classList.add('oculto');
+
+  const nomeNovo = document.getElementById('novo-nome').value.trim();
+  const email = document.getElementById('novo-email').value.trim();
+  const papelNovo = document.getElementById('novo-papel').value;
+  const curto = document.getElementById('novo-curto').value.trim();
+  const fone = document.getElementById('novo-fone').value.trim();
+
+  if (nomeNovo.length < 2) {
+    erro.textContent = 'Informe o nome completo.';
+    erro.classList.remove('oculto'); return;
+  }
+  if (!email.includes('@')) {
+    erro.textContent = 'Informe um e-mail válido — ele será o login da pessoa.';
+    erro.classList.remove('oculto'); return;
+  }
+  try {
+    if (editandoId) {
+      await chamar('/usuarios/' + editandoId, {
+        method: 'PUT',
+        body: JSON.stringify({nome: nomeNovo, email, papel: papelNovo,
+                            nome_curto: curto, telefone: fone})
+      });
+      cancelarEdicao();
+      await carregarEquipe();
+      desenharEquipe();
+      mostrar('ok', 'Cadastro atualizado', '');
+      return;
+    }
+    const r = await chamar('/usuarios', {
+      method: 'POST',
+      body: JSON.stringify({nome: nomeNovo, email, papel: papelNovo,
+                            nome_curto: curto, telefone: fone})
+    });
+    cred.innerHTML = `<b>${escapar(r.nome)} cadastrado(a)</b>
+      Entregue estes dados. A senha aparece só desta vez.
+      <code>${escapar(r.email)}</code>
+      <code>${escapar(r.senha_inicial)}</code>`;
+    cred.classList.remove('oculto');
+    document.getElementById('novo-nome').value = '';
+    document.getElementById('novo-email').value = '';
+    document.getElementById('novo-curto').value = '';
+    document.getElementById('novo-fone').value = '';
+    await carregarEquipe();
+    desenharEquipe();
+  } catch (e) {
+    erro.textContent = e.corpo && typeof e.corpo.detail === 'string'
+      ? e.corpo.detail
+      : (editandoId ? 'Não foi possível salvar.' : 'Não foi possível cadastrar.');
+    erro.classList.remove('oculto');
+  }
+}
+
+async function alternarAtivo(id, ativo) {
+  try {
+    await chamar('/usuarios/' + id, {
+      method: 'PATCH', body: JSON.stringify({ativo})});
+    await carregarEquipe();
+    desenharEquipe();
+  } catch (e) {
+    mostrar('erro', 'Não foi possível alterar',
+      e.corpo && typeof e.corpo.detail === 'string' ? e.corpo.detail : '');
+  }
+}
+
+/* ====================================== MINHAS DATAS / DATAS DA EQUIPE == */
+function alternarPreferencia() {
+  const porData = document.getElementById('pref-quando').value === 'data';
+  document.getElementById('campo-pref-data').classList.toggle('oculto', !porData);
+  document.getElementById('campo-pref-semana').classList.toggle('oculto', porData);
+}
+
+async function carregarDatas() {
+  const alvo = alvoAtual();
+  const sufixo = alvo ? '?bombeiro_id=' + alvo : '';
+  try {
+    const [inds, prefs] = await Promise.all([
+      chamar('/indisponibilidades' + sufixo),
+      chamar('/preferencias' + sufixo)
+    ]);
+    desenharIndisponibilidades(inds);
+    desenharPreferencias(prefs);
+  } catch (e) {
+    document.getElementById('lista-ind').innerHTML =
+      '<p class="dica">Não foi possível carregar.</p>';
+  }
+}
+
+function formatarData(iso) {
+  return new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR');
+}
+
+function desenharIndisponibilidades(lista) {
+  const alvo = document.getElementById('lista-ind');
+  if (!lista.length) {
+    alvo.innerHTML = '<p class="dica">Nenhum dia registrado até agora.</p>';
+    return;
+  }
+  alvo.innerHTML = lista.map(i => {
+    const periodo = i.inicio === i.fim
+      ? formatarData(i.inicio)
+      : formatarData(i.inicio) + ' a ' + formatarData(i.fim);
+    return `<span class="chip ${i.tipo}">
+      ${TIPOS_IND[i.tipo] || i.tipo}: ${periodo}
+      <button onclick="removerIndisponibilidade(${i.id})"
+              aria-label="Remover" title="Remover">&times;</button></span>`;
+  }).join('');
+}
+
+function desenharPreferencias(lista) {
+  const alvo = document.getElementById('lista-pref');
+  if (!lista.length) {
+    alvo.innerHTML = '<p class="dica">Nenhuma preferência registrada.</p>';
+    return;
+  }
+  alvo.innerHTML = lista.map(p => {
+    const quando = p.data ? formatarData(p.data) : NOMES_DIA[p.dia_semana];
+    const verbo = p.tipo === 'quer' ? 'Prefiro pegar' : 'Prefiro evitar';
+    return `<span class="chip ${p.tipo}">${verbo}: ${quando}
+      <button onclick="removerPreferencia(${p.id})"
+              aria-label="Remover" title="Remover">&times;</button></span>`;
+  }).join('');
+}
+
+async function salvarIndisponibilidade() {
+  const erro = document.getElementById('erro-ind');
+  erro.classList.add('oculto');
+  const inicio = document.getElementById('ind-inicio').value;
+  const fim = document.getElementById('ind-fim').value || inicio;
+
+  if (!inicio) {
+    erro.textContent = 'Escolha ao menos a data inicial.';
+    erro.classList.remove('oculto'); return;
+  }
+  if (fim < inicio) {
+    erro.textContent = 'A data final é anterior à inicial.';
+    erro.classList.remove('oculto'); return;
+  }
+  try {
+    const r = await chamar('/indisponibilidades', {
+      method: 'POST',
+      body: JSON.stringify({
+        bombeiro_id: alvoAtual(),
+        inicio, fim,
+        tipo: document.getElementById('ind-tipo').value
+      })
+    });
+    document.getElementById('ind-inicio').value = '';
+    document.getElementById('ind-fim').value = '';
+    await carregarDatas();
+
+    // Aviso de imprevisto: já existe escala publicada cobrindo esses dias.
+    if (r.plantoes_em_conflito && r.plantoes_em_conflito.length) {
+      mostrar('alerta', 'Atenção: há plantões já publicados nesse período',
+        'O supervisor precisa remanejar estes dias:',
+        r.plantoes_em_conflito.map(formatarData));
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    }
+  } catch (e) {
+    erro.textContent = e.corpo && typeof e.corpo.detail === 'string'
+      ? e.corpo.detail : 'Não foi possível salvar.';
+    erro.classList.remove('oculto');
+  }
+}
+
+async function salvarPreferencia() {
+  const erro = document.getElementById('erro-pref');
+  erro.classList.add('oculto');
+  const porData = document.getElementById('pref-quando').value === 'data';
+  const data = document.getElementById('pref-data').value;
+
+  if (porData && !data) {
+    erro.textContent = 'Escolha a data.';
+    erro.classList.remove('oculto'); return;
+  }
+  try {
+    await chamar('/preferencias', {
+      method: 'POST',
+      body: JSON.stringify({
+        bombeiro_id: alvoAtual(),
+        tipo: document.getElementById('pref-tipo').value,
+        data: porData ? data : null,
+        dia_semana: porData ? null :
+          parseInt(document.getElementById('pref-dia').value, 10),
+        peso: 1
+      })
+    });
+    document.getElementById('pref-data').value = '';
+    carregarDatas();
+  } catch (e) {
+    erro.textContent = e.corpo && typeof e.corpo.detail === 'string'
+      ? e.corpo.detail : 'Não foi possível salvar.';
+    erro.classList.remove('oculto');
+  }
+}
+
+async function removerIndisponibilidade(id) {
+  try {
+    await chamar('/indisponibilidades/' + id, {method: 'DELETE'});
+    carregarDatas();
+  } catch (e) { mostrar('erro', 'Não foi possível remover', ''); }
+}
+
+async function removerPreferencia(id) {
+  try {
+    await chamar('/preferencias/' + id, {method: 'DELETE'});
+    carregarDatas();
+  } catch (e) { mostrar('erro', 'Não foi possível remover', ''); }
+}
+
+
+
+
+
+
+/* ============================================== EXTRATO ================= */
+/* A pergunta da reunião — "por que peguei três domingos?" — é sempre
+   comparativa. O número sozinho não responde: precisa vir ao lado da média da
+   equipe e do intervalo entre quem pegou menos e quem pegou mais. */
+const ROTULO_CAT = {
+  total: 'Plantões no total', branca: 'Escala branca', vermelha: 'Escala vermelha',
+  sabado: 'Sábados', domingo: 'Domingos', feriado: 'Feriados'
+};
+
+function fecharExtrato() {
+  document.getElementById('modal-extrato').classList.add('oculto');
+}
+
+async function abrirExtrato(bombeiroId, nomeExibido) {
+  document.getElementById('extrato-titulo').textContent =
+    'Extrato de ' + (nomeExibido || 'bombeiro');
+  document.getElementById('extrato-corpo').innerHTML =
+    '<p class="dica" style="padding:20px 0">Levantando os números…</p>';
+  document.getElementById('modal-extrato').classList.remove('oculto');
+  try {
+    const e = await chamar(`/bombeiros/${bombeiroId}/extrato?ano=${ano}`);
+    document.getElementById('extrato-titulo').textContent = 'Extrato de ' + e.nome;
+    document.getElementById('extrato-corpo').innerHTML = montarExtrato(e);
+  } catch (err) {
+    document.getElementById('extrato-corpo').innerHTML =
+      '<p class="dica" style="padding:20px 0">Não foi possível levantar os números.</p>';
+  }
+}
+
+function montarExtrato(e) {
+  if (!e.meses_publicados.length) {
+    return `<div class="vazio-estado" style="padding:32px 0">
+      <b>Nenhuma escala publicada em ${e.ano}</b>
+      Os números aparecem depois da primeira publicação.</div>`;
+  }
+
+  const linhas = e.comparativo.map(c => {
+    const dif = c.meus - c.media_da_equipe;
+    let veredito = 'na média', classe = 'veredito-media';
+    if (dif >= 1) { veredito = `${dif.toFixed(1)} acima`; classe = 'veredito-acima'; }
+    else if (dif <= -1) { veredito = `${Math.abs(dif).toFixed(1)} abaixo`; classe = 'veredito-abaixo'; }
+    return `<div class="extrato-linha">
+        <span class="cat">${ROTULO_CAT[c.categoria] || c.categoria}</span>
+        <span class="meus">${c.meus}</span>
+        <span class="media">média ${c.media_da_equipe} · de ${c.menor} a ${c.maior}</span>
+        <span class="extrato-veredito ${classe}">${veredito}</span>
+      </div>`;
+  }).join('');
+
+  const meses = e.por_mes.map(l =>
+    `<div class="pq-linha">
+       <span class="rotulo">${MESES[l.mes - 1].replace(/^./, c => c.toUpperCase())}</span>
+       <span class="valor">${l.total} plantões · ${l.vermelha} vermelha</span>
+     </div>`).join('');
+
+  return `
+    <div class="extrato-cabecalho">
+      Números de <b>${e.ano}</b>, contando apenas escalas publicadas, sobre
+      ${e.meses_publicados.length} ${e.meses_publicados.length === 1 ? 'mês' : 'meses'}.
+      A comparação é com os ${e.equipe_ativa} bombeiros ativos — e leva em conta
+      que quem esteve de férias tem parcela justa menor.
+    </div>
+    <div class="pq-secao"><h3>Como você se compara à equipe</h3>${linhas}</div>
+    <div class="pq-secao"><h3>Mês a mês</h3>${meses}</div>
+    <p class="pq-nota">
+      Diferença de até um plantão é normal: as atribuições são inteiras e
+      alguém sempre fica com o de sobra. O que o motor equilibra é o acumulado
+      ao longo do tempo, não o número de um mês.
+    </p>`;
+}
+
+/* ============================================ RELATÓRIOS =============== */
+//: Campos que não interessam a quem lê o registro de alterações.
+const CAMPOS_OCULTOS = new Set([
+  'id', 'criado_em', 'criada_em', 'senha_hash', 'atualizado_em', 'resolvida_em'
+]);
+
+//: Nomes de campo em linguagem de gente.
+const CAMPOS = {
+  bombeiro_id: 'bombeiro', status: 'situação', data: 'data', tipo: 'tipo',
+  travado: 'travado', origem: 'origem', nome: 'nome', email: 'e-mail',
+  papel: 'perfil', ativo: 'ativo', observacoes: 'observações', valor: 'valor',
+  versao: 'versão', publicada_em: 'publicada em', inicio: 'início', fim: 'fim',
+  aceitante_id: 'aceitante', aprovador_id: 'aprovador', resposta: 'resposta',
+  precisa_trocar_senha: 'precisa trocar senha', dia_semana: 'dia da semana',
+  peso: 'peso', chave: 'chave', motivo: 'motivo'
+};
+
+const ENTIDADES = {
+  plantoes: 'plantão', escalas: 'escala', usuarios: 'usuário',
+  trocas: 'troca', indisponibilidades: 'indisponibilidade',
+  preferencias: 'preferência', feriados: 'feriado', parametros: 'parâmetro',
+  excecoes: 'exceção'
+};
+
+function valorLegivel(campo, valor, nomes) {
+  if (valor === null || valor === undefined || valor === '') return '—';
+  if (campo.endsWith('_id')) return nomes[valor] || '#' + valor;
+  if (valor === true) return 'sim';
+  if (valor === false) return 'não';
+  if (typeof valor === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(valor)) {
+    return new Date(valor + 'T12:00:00').toLocaleDateString('pt-BR');
+  }
+  return String(valor);
+}
+
+function prepararRelatorios() {
+  const seletor = document.getElementById('rel-ano');
+  if (!seletor.options.length) {
+    const atual = new Date().getFullYear();
+    for (let a = atual + 1; a >= atual - 3; a--) {
+      seletor.innerHTML += `<option value="${a}" ${a === ano ? 'selected' : ''}>${a}</option>`;
+    }
+  }
+  carregarRelatorios();
+}
+
+async function carregarRelatorios() {
+  const anoRel = document.getElementById('rel-ano').value || ano;
+  document.getElementById('rel-numeros').innerHTML = '<p class="dica">Carregando…</p>';
+  try {
+    const [e, aud] = await Promise.all([
+      chamar(`/estatisticas?ano=${anoRel}`),
+      chamar('/auditoria?limite=60')
+    ]);
+    desenharNumeros(e);
+    desenharTabelaAno(e);
+    desenharAuditoria(aud);
+  } catch (err) {
+    document.getElementById('rel-numeros').innerHTML =
+      '<p class="dica">Não foi possível carregar os relatórios.</p>';
+  }
+}
+
+function desenharNumeros(e) {
+  const pref = e.preferencias;
+  const meses = e.meses_publicados.length;
+  const cartoes = [
+    {valor: e.plantoes_totais,
+     rotulo: `plantões publicados em ${meses} ${meses === 1 ? 'mês' : 'meses'}`,
+     destaque: true},
+    {valor: pref.percentual !== null ? pref.percentual + '%' : '—',
+     rotulo: `preferências atendidas${pref.total ? ` (${pref.atendidas} de ${pref.total})` : ''}`,
+     barra: pref.percentual},
+    {valor: e.trocas.aprovadas,
+     rotulo: `trocas aprovadas${e.trocas.pendentes ? ` · ${e.trocas.pendentes} aguardando` : ''}`},
+    {valor: e.ajustes_manuais, rotulo: 'ajustes feitos à mão pelo supervisor'}
+  ];
+  document.getElementById('rel-numeros').innerHTML =
+    '<div class="cartoes-numero">' + cartoes.map(c => `
+      <div class="cartao-numero ${c.destaque ? 'destaque' : ''}">
+        <div class="valor">${c.valor}</div>
+        <div class="rotulo">${c.rotulo}</div>
+        ${c.barra != null ? `<div class="barra-uso"><i style="width:${c.barra}%"></i></div>` : ''}
+      </div>`).join('') + '</div>';
+}
+
+function desenharTabelaAno(e) {
+  const corpo = document.getElementById('rel-tabela');
+  if (!e.por_bombeiro.length) {
+    corpo.innerHTML = `<tr><td colspan="7"><div class="vazio-estado">
+      <b>Nenhuma escala publicada em ${e.ano}</b>
+      Os números aparecem depois da primeira publicação.</div></td></tr>`;
+    return;
+  }
+  corpo.innerHTML = e.por_bombeiro.map(l => `<tr class="clicavel"
+      onclick="abrirExtrato(${l.bombeiro_id}, '${escapar(l.nome).replace(/'/g, "\\'")}')"
+      title="Ver o extrato de ${escapar(l.nome)}">
+      <td data-rotulo="Bombeiro">${escapar(l.nome)}</td>
+      <td class="num" data-rotulo="Total"><b>${l.total}</b></td>
+      <td class="num" data-rotulo="Branca">${l.branca}</td>
+      <td class="num" data-rotulo="Vermelha">${l.vermelha}</td>
+      <td class="num" data-rotulo="Sábado">${l.sabado}</td>
+      <td class="num" data-rotulo="Domingo">${l.domingo}</td>
+      <td class="num" data-rotulo="Feriado">${l.feriado}</td>
+    </tr>`).join('');
+}
+
+function desenharAuditoria(registros) {
+  const corpo = document.getElementById('rel-auditoria');
+  if (!registros.length) {
+    corpo.innerHTML = `<tr><td colspan="4"><div class="vazio-estado">
+      <b>Nada registrado ainda</b></div></td></tr>`;
+    return;
+  }
+  const nomes = {};
+  (equipe || []).forEach(u => { nomes[u.id] = u.nome; });
+
+  corpo.innerHTML = registros.map(r => {
+    const quando = new Date(r.quando);
+    let mudanca = '';
+    if (r.operacao === 'UPDATE' && r.antes && r.depois) {
+      // Só os campos que mudaram de fato. O trigger grava a linha inteira, e
+      // listar tudo produzia ruído do tipo "branca → branca", escondendo
+      // justamente o que foi alterado.
+      mudanca = Object.keys(r.depois)
+        .filter(k => !CAMPOS_OCULTOS.has(k))
+        .filter(k => String(r.antes[k] ?? '') !== String(r.depois[k] ?? ''))
+        .slice(0, 3)
+        .map(k => `${CAMPOS[k] || k}: ` +
+                  `${escapar(valorLegivel(k, r.antes[k], nomes))} → ` +
+                  `${escapar(valorLegivel(k, r.depois[k], nomes))}`)
+        .join(' · ');
+    }
+    return `<tr>
+      <td class="mono" data-rotulo="Quando" style="font-size:12px;white-space:nowrap">
+        ${quando.toLocaleDateString('pt-BR')}<br>
+        <span style="color:var(--tinta-3)">${quando.toLocaleTimeString('pt-BR',
+          {hour: '2-digit', minute: '2-digit'})}</span></td>
+      <td data-rotulo="O quê">
+        <span class="auditoria-op ${escapar(r.operacao)}">${escapar(r.operacao)}</span>
+        ${ENTIDADES[r.entidade] || escapar(r.entidade)}
+        ${mudanca ? `<div class="auditoria-linha">${mudanca}</div>` : ''}</td>
+      <td data-rotulo="Quem">${escapar(nomes[r.usuario_id] ||
+        (r.usuario_id ? '#' + r.usuario_id : 'sistema'))}</td>
+      <td data-rotulo="Motivo" class="auditoria-linha">${escapar(r.motivo || '—')}</td>
+    </tr>`;
+  }).join('');
+}
+
+
+
+/* ======================================== GERAR ESCALA ================= */
+/* Os parâmetros da Parte 0 existiam só na API, sem interface: o supervisor
+   não tinha como ver nem ajustar a folga obrigatória, que é a decisão de
+   domínio mais importante do sistema. */
+const CAMPOS_PARAM = {
+  'ger-descanso': 'intervalo_minimo_dias',
+  'ger-desejavel': 'intervalo_desejavel_dias',
+  'ger-duracao': 'duracao_plantao_horas'
+};
+
+async function prepararGeracao() {
+  const seletor = document.getElementById('ger-mes');
+  seletor.innerHTML = '';
+  for (let passo = -1; passo <= 6; passo++) {
+    const d = new Date(ano, mes - 1 + passo, 1);
+    const valor = `${d.getFullYear()}-${d.getMonth() + 1}`;
+    seletor.innerHTML += `<option value="${valor}" ${passo === 0 ? 'selected' : ''}>` +
+      `${MESES[d.getMonth()].replace(/^./, c => c.toUpperCase())} de ${d.getFullYear()}</option>`;
+  }
+
+  try {
+    const p = await chamar('/parametros');
+    for (const [campo, chave] of Object.entries(CAMPOS_PARAM)) {
+      document.getElementById(campo).value = p.efetivos[chave];
+    }
+  } catch (e) { /* mantém o que estiver na tela */ }
+
+  desenharResultadoGeracao();
+}
+
+function desenharResultadoGeracao() {
+  const alvo = document.getElementById('ger-resultado');
+  if (!escala) {
+    alvo.innerHTML = '<p class="dica">Gere a escala para ver os números deste mês.</p>';
+    return;
+  }
+  const conflitos = 0;  // escala existente já passou pelo verificador
+  alvo.innerHTML = `
+    <div class="numeros-resultado">
+      <div class="numero-caixa"><div class="rotulo">Plantões</div>
+        <div class="valor">${escala.plantoes.length}</div></div>
+      <div class="numero-caixa ${conflitos ? 'alerta' : ''}">
+        <div class="rotulo">Conflitos</div><div class="valor">${conflitos}</div></div>
+      <div class="numero-caixa"><div class="rotulo">Critérios</div>
+        <div class="valor">${estagios.length}</div></div>
+    </div>
+    <p class="dica" style="margin:0 0 12px">
+      <b>${escala.status === 'publicada' ? 'Publicada' : 'Rascunho'}</b> —
+      versão ${escala.versao}. ${escapar(escala.resumo || '')}
+    </p>
+    ${estagios.map(e => `<div class="pq-linha">
+        <span class="rotulo">${escapar(e.descricao)}</span>
+        <span class="valor">${escapar(e.valor_legivel || '')}</span>
+      </div>`).join('')}`;
+}
+
+async function salvarParametros() {
+  const erro = document.getElementById('erro-param');
+  erro.classList.add('oculto');
+
+  const minimo = parseInt(document.getElementById('ger-descanso').value, 10);
+  const desejavel = parseInt(document.getElementById('ger-desejavel').value, 10);
+  if (isNaN(minimo) || isNaN(desejavel)) {
+    erro.textContent = 'Preencha os campos com números.';
+    erro.classList.remove('oculto'); return;
+  }
+  if (desejavel < minimo) {
+    erro.textContent = 'A folga desejável não pode ser menor que a obrigatória.';
+    erro.classList.remove('oculto'); return;
+  }
+
+  const confirmou = await perguntar({
+    titulo: 'Alterar parâmetros do motor',
+    texto: `Isso muda como <b>todas as próximas escalas</b> serão montadas.
+            As já publicadas não são afetadas.<br><br>
+            A folga obrigatória é a regra mais sensível do sistema — deve
+            refletir o regime real da corporação.`,
+    botao: 'Salvar'
+  });
+  if (confirmou === null) return;
+
+  try {
+    for (const [campo, chave] of Object.entries(CAMPOS_PARAM)) {
+      await chamar('/parametros', {
+        method: 'PUT',
+        body: JSON.stringify({chave, valor: document.getElementById(campo).value})
+      });
+    }
+    mostrar('ok', 'Parâmetros salvos',
+      'Gere a escala novamente para aplicá-los ao mês atual.');
+  } catch (e) {
+    const d = e.corpo && e.corpo.detail;
+    erro.textContent = typeof d === 'string'
+      ? d : 'Só o administrador pode alterar os parâmetros.';
+    erro.classList.remove('oculto');
+  }
+}
+
+/* =================================== POR QUE ESTA ESCALA =============== */
+/* Diferente da explicação de um dia, que roda um contrafactual, este painel
+   mostra o retrato das restrições que existiam quando o mês foi montado.
+   Nenhum número é estimado: tudo sai dos plantões e cadastros. */
+function atualizarBarraMes() {
+  const gerencia = papel === 'supervisor' || papel === 'administrador';
+  const mostrar = gerencia && vista === 'escala' && !!escala;
+  document.getElementById('barra-mes').classList.toggle('oculto', !mostrar);
+  if (!mostrar) return;
+  // Recomeçar só faz sentido em rascunho: publicada não é descartada.
+  const rascunho = escala.status === 'rascunho';
+  const botao = document.getElementById('btn-recomecar');
+  botao.disabled = !rascunho;
+  botao.title = rascunho
+    ? 'Descartar o rascunho e montar de novo do zero'
+    : 'Escala publicada não é descartada — gere uma versão nova';
+}
+
+function fecharPorque() {
+  document.getElementById('modal-porque').classList.add('oculto');
+}
+
+async function abrirPorque() {
+  if (!escala) {
+    mostrar('alerta', 'Nada para explicar', 'Gere a escala deste mês primeiro.');
+    return;
+  }
+  document.getElementById('porque-titulo').textContent =
+    'Por que a escala de ' + MESES[mes - 1] + ' saiu assim';
+  document.getElementById('porque-corpo').innerHTML =
+    '<p class="dica" style="padding:20px 0">Levantando os números…</p>';
+  document.getElementById('modal-porque').classList.remove('oculto');
+
+  try {
+    const p = await chamar(`/escalas/${ano}/${mes}/porque`);
+    document.getElementById('porque-corpo').innerHTML = montarPorque(p);
+  } catch (e) {
+    document.getElementById('porque-corpo').innerHTML =
+      '<p class="dica" style="padding:20px 0">Não foi possível levantar os números deste mês.</p>';
+  }
+}
+
+function montarPorque(p) {
+  const pref = p.preferencias;
+  const partes = [];
+
+  partes.push(`<div class="pq-resumo">
+    O mês tem <b>${p.dias_no_mes} dias</b>, sendo <b>${p.dias_vermelhos}</b> de
+    escala vermelha (fim de semana ou feriado). Havia
+    <b>${p.bombeiros_ativos} bombeiros ativos</b>, e o motor precisou encaixar
+    todos os dias respeitando férias, licenças e o descanso obrigatório.
+  </div>`);
+
+  // --- quem faltou ------------------------------------------------------
+  partes.push('<div class="pq-secao"><h3>Quem estava fora, e quanto tempo</h3>');
+  if (!p.ausencias.length) {
+    partes.push('<p class="pq-vazio">Ninguém indisponível neste mês — o motor teve toda a equipe.</p>');
+  } else {
+    partes.push(p.ausencias.map(a => `<div class="pq-linha">
+        <span class="rotulo"><b>${escapar(a.bombeiro)}</b> — ${escapar(a.tipo)},
+          de ${formatarData(a.de)} a ${formatarData(a.ate)}</span>
+        <span class="valor">${a.dias} ${a.dias === 1 ? 'dia' : 'dias'}</span>
+      </div>`).join(''));
+    partes.push(`<p class="pq-nota">Nesses dias essas pessoas não podiam ser
+      escaladas de jeito nenhum: é regra obrigatória, não preferência.</p>`);
+  }
+  partes.push('</div>');
+
+  // --- saldo de entrada -------------------------------------------------
+  partes.push(`<div class="pq-secao">
+    <h3>Com que saldo cada um entrou no mês</h3>
+    <p class="pq-nota" style="margin:0 0 8px">
+      Negativo (escuro) = vinha trabalhando abaixo da parcela justa, então
+      tende a receber mais. Positivo (laranja) = vinha acima, tende a receber
+      menos.
+    </p>`);
+  partes.push(p.entrada_do_mes.map(e => {
+    const classe = e.saldo < -0.05 ? 'pq-saldo-neg' : (e.saldo > 0.05 ? 'pq-saldo-pos' : '');
+    return `<div class="pq-linha">
+        <span class="rotulo">${escapar(e.bombeiro)}</span>
+        <span class="valor ${classe}">${e.saldo > 0 ? '+' : ''}${e.saldo.toFixed(2)}</span>
+        <span class="valor">${e.plantoes_no_mes} plantões</span>
+      </div>`;
+  }).join(''));
+  partes.push('</div>');
+
+  // --- distribuição do mês ----------------------------------------------
+  partes.push(`<div class="pq-secao">
+    <h3>Quem pegou o quê neste mês</h3>
+    <p class="pq-nota" style="margin:0 0 8px">
+      Ordenado por quem pegou mais fim de semana e feriado. É a resposta para
+      "por que eu peguei três domingos e o colega nenhum".
+    </p>
+    <div class="tabela-rolavel"><table>
+      <thead><tr><th>Bombeiro</th><th class="num">Total</th>
+        <th class="num">Vermelha</th><th class="num">Sáb</th>
+        <th class="num">Dom</th><th class="num">Feriado</th></tr></thead>
+      <tbody>${(p.distribuicao || []).map(l => `<tr>
+        <td data-rotulo="Bombeiro">${escapar(l.bombeiro)}</td>
+        <td class="num" data-rotulo="Total"><b>${l.total}</b></td>
+        <td class="num" data-rotulo="Vermelha">${l.vermelha}</td>
+        <td class="num" data-rotulo="Sábado">${l.sabado}</td>
+        <td class="num" data-rotulo="Domingo">${l.domingo}</td>
+        <td class="num" data-rotulo="Feriado">${l.feriado}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  </div>`);
+
+  // --- preferências -----------------------------------------------------
+  const taxa = pref.total ? Math.round(100 * pref.atendidas / pref.total) : null;
+  partes.push(`<div class="pq-secao"><h3>Preferências</h3>`);
+  if (!pref.total) {
+    partes.push('<p class="pq-vazio">Ninguém declarou preferência para os dias deste mês.</p>');
+  } else {
+    partes.push(`<p class="pq-nota" style="margin:0 0 8px">
+      <b>${pref.atendidas} de ${pref.total}</b> atendidas (${taxa}%). Preferência
+      é o último critério: ela cede quando atendê-la desequilibraria a escala.</p>`);
+    if (pref.frustradas.length) {
+      partes.push(pref.frustradas.map(f => `<div class="pq-linha">
+          <span class="rotulo">${escapar(f.bombeiro)} preferia não pegar
+            ${formatarData(f.data)}, mas foi escalado</span>
+        </div>`).join(''));
+    } else {
+      partes.push('<p class="pq-vazio">Todas foram atendidas.</p>');
+    }
+  }
+  partes.push('</div>');
+
+  // --- dias apertados ---------------------------------------------------
+  if (p.dias_apertados.length) {
+    partes.push(`<div class="pq-secao">
+      <h3>Dias com pouca gente disponível</h3>
+      <p class="pq-nota" style="margin:0 0 8px">
+        Nestes dias a escolha era quase forçada — havia poucos candidatos
+        possíveis.</p>`);
+    partes.push(p.dias_apertados.map(d => `<div class="pq-linha">
+        <span class="rotulo">${formatarData(d.data)} — ficou com
+          <b>${escapar(d.escalado)}</b></span>
+        <span class="valor">${d.disponiveis} disponíveis</span>
+      </div>`).join(''));
+    partes.push('</div>');
+  }
+
+  // --- critérios --------------------------------------------------------
+  if (p.estagios.length) {
+    partes.push(`<div class="pq-secao">
+      <h3>Como o motor decidiu, em ordem</h3>
+      <p class="pq-nota" style="margin:0 0 8px">
+        Cada critério só entra depois que o anterior chegou ao melhor resultado
+        possível. É isso que impede "equilibrar sábados" de passar na frente de
+        "respeitar férias".</p>`);
+    partes.push(p.estagios.map(e => `<div class="pq-linha">
+        <span class="rotulo">${escapar(e.descricao)}</span>
+        <span class="valor">${escapar(e.legivel || e.valor_legivel || '')}</span>
+      </div>`).join(''));
+    partes.push('</div>');
+  }
+
+  // --- intervenções humanas ---------------------------------------------
+  if (p.ajustes_manuais || p.trocas_aplicadas) {
+    partes.push(`<div class="pq-secao"><h3>O que foi mexido depois</h3>
+      <div class="pq-linha">
+        <span class="rotulo">Ajustes feitos à mão pelo supervisor</span>
+        <span class="valor">${p.ajustes_manuais}</span></div>
+      <div class="pq-linha">
+        <span class="rotulo">Trocas aprovadas entre bombeiros</span>
+        <span class="valor">${p.trocas_aplicadas}</span></div>
+      <p class="pq-nota">Estes dias saíram do que o motor propôs — foram
+        decisão de pessoas, e estão no registro de alterações.</p>
+    </div>`);
+  }
+
+  return partes.join('');
+}
+
+/* =================================== RECOMEÇAR A ESCALA =============== */
+async function recomecarEscala() {
+  if (!escala) {
+    mostrar('alerta', 'Nada para recomeçar', 'Não há escala neste mês.');
+    return;
+  }
+  if (escala.status === 'publicada') {
+    mostrar('alerta', 'Esta escala já está publicada',
+      'Escala publicada não é descartada — a equipe já se planejou com ela. ' +
+      'Para trocá-la, gere uma versão nova e publique.');
+    return;
+  }
+
+  const travados = escala.plantoes.filter(p => p.travado).length;
+  const detalhe = travados
+    ? `Você tem <b>${travados} plantão(ões) ajustado(s) à mão</b> neste rascunho.
+       Eles serão perdidos.`
+    : 'O rascunho atual será descartado.';
+
+  const confirmou = await perguntar({
+    titulo: 'Recomeçar do zero',
+    texto: `${detalhe} O mês será montado de novo, sem nenhuma trava — o motor
+            fica livre para redistribuir tudo.<br><br>
+            Férias, licenças e preferências <b>não</b> são apagadas.`,
+    botao: 'Recomeçar',
+    perigo: true
+  });
+  if (confirmou === null) return;
+
+  try {
+    const r = await chamar(`/escalas/${ano}/${mes}/rascunho`, {method: 'DELETE'});
+    escala = null; estagios = [];
+    await carregar();
+    mostrar('ok', 'Rascunho descartado',
+      (r.ajustes_perdidos
+        ? `${r.ajustes_perdidos} ajuste(s) foram desfeitos. `
+        : '') + 'Clique em "Gerar escala" para montar do zero.');
+  } catch (e) {
+    const d = e.corpo && e.corpo.detail;
+    mostrar('erro', 'Não foi possível recomeçar',
+      typeof d === 'string' ? d : '');
+  }
+}
+
+/* ======================================== MODO EXCEÇÃO ================= */
+/* Parte 0.5: com efetivo pequeno e férias sobrepostas pode não haver escala
+   possível. O sistema nunca relaxa a regra sozinho — quem assume a decisão é
+   uma pessoa, com nome e justificativa no registro. */
+function mostrarSemSolucao(conflitos) {
+  const lista = (conflitos || []).map(c => `<li>${escapar(c)}</li>`).join('');
+  document.getElementById('mensagem').innerHTML = `
+    <div class="aviso aviso-erro">
+      <div style="width:100%">
+        <b>Não há escala possível com as regras atuais</b>
+        Nenhuma regra obrigatória foi flexibilizada — o sistema prefere avisar
+        a entregar uma escala inválida. Resolva um destes pontos:
+        <ul>${lista}</ul>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" onclick="abrirExcecao()">Autorizar uma exceção</button>
+          <button class="btn" onclick="verExcecoes()">Ver exceções deste mês</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function abrirExcecao() {
+  // Só faz sentido dispensar o descanso: cobrir todo dia deixaria o quartel
+  // vazio, e férias são direito de quem está de folga.
+  const bombeiros = (equipe || []).filter(u => u.papel === 'bombeiro' && u.ativo);
+  if (!bombeiros.length) {
+    mostrar('alerta', 'Sem bombeiros ativos', 'Cadastre a equipe primeiro.');
+    return;
+  }
+  const opcoes = bombeiros.map(b =>
+    `<option value="${b.id}">${escapar(b.nome)}</option>`).join('');
+  const ultimo = new Date(ano, mes, 0).getDate();
+
+  document.getElementById('confirmar-titulo').textContent = 'Autorizar exceção';
+  document.getElementById('confirmar-texto').innerHTML = `
+    Libera <b>apenas este bombeiro, apenas neste dia</b>, da regra de descanso
+    mínimo. Fica registrado com seu nome e a justificativa.
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <div style="flex:1">
+        <label style="display:block;font-size:12px;color:var(--tinta-2);margin-bottom:5px">Bombeiro</label>
+        <select id="exc-bombeiro" style="width:100%;padding:9px 12px;border:1px solid var(--borda);
+          border-radius:var(--raio);font-size:14px;font-family:inherit">${opcoes}</select>
+      </div>
+      <div style="width:130px">
+        <label style="display:block;font-size:12px;color:var(--tinta-2);margin-bottom:5px">Dia</label>
+        <input id="exc-dia" type="number" min="1" max="${ultimo}" value="1"
+          style="width:100%;padding:9px 12px;border:1px solid var(--borda);
+          border-radius:var(--raio);font-size:14px;font-family:inherit">
+      </div>
+    </div>`;
+
+  const justificativa = await perguntar({
+    titulo: 'Autorizar exceção',
+    texto: document.getElementById('confirmar-texto').innerHTML,
+    rotuloCampo: 'Justificativa (mínimo 10 caracteres, fica no registro)',
+    botao: 'Autorizar',
+    perigo: true
+  });
+  if (justificativa === null) return;
+  if (justificativa.trim().length < 10) {
+    mostrar('alerta', 'Justificativa muito curta',
+      'Explique em pelo menos 10 caracteres por que a exceção é necessária.');
+    return;
+  }
+
+  const bombeiroId = parseInt(document.getElementById('exc-bombeiro').value, 10);
+  const dia = parseInt(document.getElementById('exc-dia').value, 10);
+  const data = `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+
+  try {
+    await chamar(`/escalas/${ano}/${mes}/excecoes`, {
+      method: 'POST',
+      body: JSON.stringify({
+        data, bombeiro_id: bombeiroId, regra_dispensada: 'H3',
+        justificativa: justificativa.trim()
+      })
+    });
+    mostrar('ok', 'Exceção autorizada',
+      'Gere a escala novamente — o motor agora pode usar esta liberação.');
+  } catch (e) {
+    const d = e.corpo && e.corpo.detail;
+    mostrar('erro', 'Não foi possível autorizar',
+      typeof d === 'string' ? d : 'Verifique os dados informados.');
+  }
+}
+
+async function verExcecoes() {
+  try {
+    const lista = await chamar(`/escalas/${ano}/${mes}/excecoes`);
+    if (!lista.length) {
+      mostrar('info', 'Nenhuma exceção neste mês',
+        'A escala está sendo montada apenas com as regras normais.');
+      return;
+    }
+    mostrar('alerta', `${lista.length} exceção(ões) autorizada(s)`,
+      'Estas liberações estão valendo para este mês:',
+      lista.map(e => `${e.bombeiro} em ${formatarData(e.data)} — ` +
+                     `"${e.justificativa}" (por ${e.autorizada_por})`));
+  } catch (e) {
+    mostrar('erro', 'Não foi possível listar as exceções', '');
+  }
+}
+
+/* ======================================== PENDÊNCIAS =================== */
+/* O sistema não envia e-mail nem push: ele é consultado. Este painel é o
+   equivalente honesto — quem abre vê o que falta fazer, com um caminho direto
+   para resolver, em vez de descobrir por acaso navegando pelas abas. */
+async function carregarPendencias() {
+  const painel = document.getElementById('painel-pendencias');
+  try {
+    const r = await chamar('/pendencias');
+    if (!r.total) { painel.classList.add('oculto'); return; }
+
+    document.getElementById('selo-pendencias').textContent = r.total;
+    document.getElementById('lista-pendencias').innerHTML = r.itens.map((i, n) => `
+      <div class="pendencia">
+        <span class="ponto ${i.urgencia}"></span>
+        <span class="texto">${escapar(i.texto)}</span>
+        <button class="btn" onclick="irParaPendencia(${n})">Resolver</button>
+      </div>`).join('');
+    window._pendencias = r.itens;
+    painel.classList.remove('oculto');
+  } catch (e) {
+    painel.classList.add('oculto');
+  }
+}
+
+async function irParaPendencia(indice) {
+  const item = (window._pendencias || [])[indice];
+  if (!item) return;
+  if (item.ano && item.mes && (item.ano !== ano || item.mes !== mes)) {
+    ano = item.ano; mes = item.mes;
+    await carregar();
+  }
+  irPara(item.vista || 'escala');
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+/* ======================================== CONFIRMAÇÃO ================== */
+/* Substitui confirm() e prompt() nativos: eles travam a página, ignoram o
+   visual do sistema e, no celular, aparecem com o endereço do site em cima —
+   o que num sistema de trabalho passa impressão de improviso. */
+let _resolverConfirmacao = null;
+
+function perguntar({titulo, texto, rotuloCampo = null, valor = '',
+                    botao = 'Confirmar', perigo = false}) {
+  document.getElementById('confirmar-titulo').textContent = titulo;
+  document.getElementById('confirmar-texto').innerHTML = texto;
+
+  const campo = document.getElementById('confirmar-campo');
+  const entrada = document.getElementById('confirmar-entrada');
+  campo.classList.toggle('oculto', !rotuloCampo);
+  if (rotuloCampo) {
+    document.getElementById('confirmar-rotulo').textContent = rotuloCampo;
+    entrada.value = valor;
+  }
+
+  const ok = document.getElementById('confirmar-ok');
+  ok.textContent = botao;
+  ok.classList.toggle('btn-perigo', perigo);
+  ok.classList.toggle('btn-primario', !perigo);
+
+  document.getElementById('modal-confirmar').classList.remove('oculto');
+  setTimeout(() => (rotuloCampo ? entrada : ok).focus(), 60);
+  return new Promise(resolve => { _resolverConfirmacao = resolve; });
+}
+
+function responderConfirmacao(confirmou) {
+  document.getElementById('modal-confirmar').classList.add('oculto');
+  const entrada = document.getElementById('confirmar-entrada');
+  const resolver = _resolverConfirmacao;
+  _resolverConfirmacao = null;
+  if (resolver) resolver(confirmou === null ? null : (entrada.value || ''));
+}
+
+document.getElementById('confirmar-entrada').addEventListener('keydown', e => {
+  if (e.key === 'Enter') responderConfirmacao(true);
+});
+
+/* ======================================== PAINEL DO DIA ================ */
+let diaAberto = null;
+
+function fecharDia() {
+  document.getElementById('modal-dia').classList.add('oculto');
+  diaAberto = null;
+}
+
+async function abrirDia(dia) {
+  if (!escala) return;
+  diaAberto = dia;
+  const data = new Date(ano, mes - 1, dia);
+  document.getElementById('dia-titulo').textContent =
+    data.toLocaleDateString('pt-BR') + ' · ' + DIAS_SEMANA[data.getDay()];
+  document.getElementById('dia-corpo').innerHTML =
+    '<p class="dica" style="padding:20px 0">Carregando…</p>';
+  document.getElementById('modal-dia').classList.remove('oculto');
+
+  try {
+    const det = await chamar(`/escalas/${ano}/${mes}/dia/${dia}`);
+    desenharDia(det);
+    // A explicação exige um cálculo extra; chega depois, sem travar o painel.
+    carregarExplicacaoDoDia(dia);
+  } catch (e) {
+    document.getElementById('dia-corpo').innerHTML =
+      '<p class="dica" style="padding:20px 0">Não foi possível carregar este dia.</p>';
+  }
+}
+
+function desenharDia(det) {
+  const gerencia = papel === 'supervisor' || papel === 'administrador';
+  const etiquetas = [`<span class="pilula ${det.tipo}">${det.tipo}</span>`];
+  if (det.feriado) etiquetas.push(`<span class="pilula vermelha">${escapar(det.feriado)}</span>`);
+  if (det.travado) etiquetas.push('<span class="pilula travado">travado</span>');
+  if (det.origem === 'troca') etiquetas.push('<span class="pilula branca">troca aprovada</span>');
+  if (det.origem === 'manual') etiquetas.push('<span class="pilula branca">ajuste manual</span>');
+
+  let html = `<div class="dia-cabecalho">
+      <span class="quem-hoje">${escapar(det.bombeiro)}</span>
+      ${etiquetas.join(' ')}
+    </div>
+    <div id="explicacao-dia" class="dia-explicacao">Verificando por que esta escolha…</div>`;
+
+  if (det.passado) {
+    html += '<p class="dica">Este plantão já aconteceu e não pode ser alterado.</p>';
+  } else if (gerencia) {
+    // Atalho para o caso mais comum e mais urgente: alguém liga de manhã
+    // avisando que não vem. Antes eram 3 telas — registrar a ausência numa
+    // aba, achar substituto em outra, sem caminho óbvio entre elas.
+    html += `<div class="acao-rapida">
+        <div>
+          <b>Faltou hoje?</b>
+          <div class="dica" style="margin:2px 0 0">
+            Registra a ausência de ${escapar(det.bombeiro)} nesta data e já
+            deixa a lista abaixo pronta para escolher quem cobre.
+          </div>
+        </div>
+        <button class="btn" onclick="registrarFaltaDoDia(${det.bombeiro_id},
+                '${det.data}')">Registrar ausência</button>
+      </div>`;
+    html += `<p class="candidatos-titulo">Substituir por</p>
+      <p class="candidatos-dica">
+        Ordenado por quem tem menos plantões — a mesma prioridade que o
+        algoritmo usa. Quem está impedido aparece no fim, com o motivo.
+      </p>`;
+    html += det.candidatos.map(c => {
+      const pref = c.preferencia
+        ? `<span class="etiqueta-pref ${c.preferencia}">${
+            c.preferencia === 'quer' ? 'prefere este dia' : 'prefere evitar'}</span>`
+        : '';
+      // O sistema ordena os substitutos, mas quem liga é o supervisor. Sem o
+      // telefone aqui, ele sai do sistema para procurar o contato no celular.
+      const ligar = c.telefone
+        ? `<a class="mini ligar" href="tel:${escapar(c.telefone.replace(/\D/g,''))}"
+             title="Ligar para ${escapar(c.telefone)}">Ligar</a>`
+        : '';
+      const acao = c.elegivel
+        ? ligar + `<button class="mini" onclick="substituir(${det.plantao_id}, ${c.bombeiro_id})">Escalar</button>`
+        : '';
+      return `<div class="candidato ${c.elegivel ? '' : 'bloqueado'}">
+          <span class="marca ${c.elegivel ? 'ok' : 'nao'}"></span>
+          <span class="crescer">
+            <span class="candidato-nome">${escapar(c.nome)}</span>${pref}
+            <div class="candidato-razao">${escapar(c.elegivel ? c.nota : c.bloqueio)}${
+              c.telefone && c.elegivel
+                ? ` · <a class="tel" href="tel:${escapar(c.telefone.replace(/\D/g, ''))}"
+                       title="Ligar para ${escapar(c.nome)}">${escapar(c.telefone)}</a>`
+                : ''}</div>
+          </span>
+          <span class="saldo">${c.saldo_total > 0 ? '+' : ''}${c.saldo_total.toFixed(2)}</span>
+          ${acao}
+        </div>`;
+    }).join('');
+    html += '<div id="erro-dia" class="aviso aviso-erro oculto" style="margin-top:14px"></div>';
+    window._candidatos = det.candidatos;
+  }
+  document.getElementById('dia-corpo').innerHTML = html;
+}
+
+async function carregarExplicacaoDoDia(dia) {
+  const alvo = document.getElementById('explicacao-dia');
+  if (!alvo) return;
+  try {
+    const r = await chamar(`/escalas/${ano}/${mes}/explicacao/${dia}`);
+    if (diaAberto === dia) alvo.textContent = r.texto;
+  } catch (e) {
+    if (diaAberto === dia) {
+      alvo.textContent = 'A explicação não está disponível para este dia.';
+    }
+  }
+}
+
+/* O caminho de 6h da manhã: o supervisor já está olhando o dia quando o
+   telefone toca. Registrar a ausência daqui evita ir e voltar entre abas. */
+async function registrarFaltaDoDia(bombeiroId, data) {
+  const pessoa = (equipe || []).find(u => u.id === bombeiroId);
+  const nomeAlvo = pessoa ? pessoa.nome : 'esta pessoa';
+
+  const motivo = await perguntar({
+    titulo: 'Registrar ausência',
+    texto: `<b>${escapar(nomeAlvo)}</b> não vai cumprir o plantão de
+            ${formatarData(data)}. A ausência entra no cadastro e o motor
+            deixa de escalar essa pessoa nesta data.`,
+    rotuloCampo: 'Tipo: atestado, licença, afastamento ou férias',
+    valor: 'atestado',
+    botao: 'Registrar'
+  });
+  if (motivo === null) return;
+
+  const tipo = (motivo || 'atestado').trim().toLowerCase();
+  if (!['atestado', 'licenca', 'licença', 'afastamento', 'ferias', 'férias']
+      .includes(tipo)) {
+    mostrar('alerta', 'Tipo não reconhecido',
+      'Use atestado, licença, afastamento ou férias.');
+    return;
+  }
+  const normalizado = tipo.replace('ç', 'c').replace('é', 'e');
+
+  try {
+    await chamar('/indisponibilidades', {
+      method: 'POST',
+      body: JSON.stringify({bombeiro_id: bombeiroId, inicio: data, fim: data,
+                            tipo: normalizado})
+    });
+    // Recarrega o painel: quem faltou passa a aparecer bloqueado, e a lista
+    // de substitutos já reflete a ausência.
+    await abrirDia(parseInt(data.slice(-2), 10));
+    mostrar('ok', 'Ausência registrada',
+      `${nomeAlvo} não será mais escalado nesta data. Escolha quem cobre na lista.`);
+  } catch (e) {
+    const d = e.corpo && e.corpo.detail;
+    mostrar('erro', 'Não foi possível registrar',
+      typeof d === 'string' ? d : '');
+  }
+}
+
+async function substituir(plantaoId, bombeiroId) {
+  const erro = document.getElementById('erro-dia');
+  if (erro) erro.classList.add('oculto');
+  const escolhido = (window._candidatos || []).find(c => c.bombeiro_id === bombeiroId);
+  const nomeNovo = escolhido ? escolhido.nome : 'esta pessoa';
+
+  const motivo = await perguntar({
+    titulo: 'Alterar este plantão',
+    texto: `<b>${escapar(nomeNovo)}</b> vai assumir este dia no lugar de quem
+            está escalado. O plantão fica travado — regerar o mês vai preservá-lo.`,
+    rotuloCampo: 'Motivo (fica registrado na auditoria)',
+    botao: 'Escalar'
+  });
+  if (motivo === null) return;
+
+  try {
+    await chamar('/plantoes/' + plantaoId, {
+      method: 'PATCH',
+      body: JSON.stringify({novo_bombeiro_id: bombeiroId, motivo})
+    });
+    fecharDia();
+    await carregar();
+    mostrar('ok', 'Plantão alterado',
+      `${nomeNovo} assumiu o dia. O plantão ficou travado: regerar o mês vai preservá-lo.`);
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  } catch (e) {
+    const d = e.corpo && e.corpo.detail;
+    const texto = d && d.violacoes
+      ? 'A alteração violaria regras obrigatórias: ' + d.violacoes.join(' ')
+      : (typeof d === 'string' ? d : 'Não foi possível alterar.');
+    if (erro) {
+      erro.textContent = texto;
+      erro.classList.remove('oculto');
+    }
+  }
+}
+
+/* ============================================== TROCAS ================== */
+function rotuloData(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  return d.toLocaleDateString('pt-BR') + ', ' + DIAS_SEMANA[d.getDay()];
+}
+
+async function atualizarSeloTrocas() {
+  try {
+    const trocas = await chamar('/trocas');
+    const pendentes = trocas.filter(t => t.posso_aceitar || t.posso_aprovar).length;
+    ['selo-trocas', 'selo-sub-trocas'].forEach(id => {
+      const selo = document.getElementById(id);
+      if (!selo) return;
+      selo.textContent = pendentes;
+      selo.classList.toggle('oculto', pendentes === 0);
+    });
+  } catch (e) { /* selo é acessório */ }
+}
+
+async function carregarTrocas() {
+  const alvo = document.getElementById('lista-trocas');
+  alvo.innerHTML = '<p class="dica">Carregando…</p>';
+  try {
+    const trocas = await chamar('/trocas');
+    desenharTrocas(trocas);
+    if (papel === 'bombeiro') await carregarMeusPlantoes();
+    atualizarSeloTrocas();
+  carregarPendencias();
+  } catch (e) {
+    alvo.innerHTML = '<p class="dica">Não foi possível carregar os pedidos.</p>';
+  }
+}
+
+function desenharTrocas(trocas) {
+  const alvo = document.getElementById('lista-trocas');
+  if (!trocas.length) {
+    alvo.innerHTML = `<div class="vazio-estado" style="padding:32px 0">
+      <b>Nenhum pedido de troca</b>
+      ${papel === 'bombeiro'
+        ? 'Use o formulário acima para pedir uma troca.'
+        : 'Quando alguém pedir uma troca, ela aparece aqui para aprovação.'}
+    </div>`;
+    return;
+  }
+
+  alvo.innerHTML = trocas.map(t => {
+    const linhas = [];
+    if (t.data_oferecida) {
+      linhas.push(`<b>${escapar(t.solicitante)}</b> entrega ${rotuloData(t.data)}`);
+      linhas.push(`recebe ${rotuloData(t.data_oferecida)}` +
+        (t.aceitante ? ` de <b>${escapar(t.aceitante)}</b>` : ''));
+    } else {
+      linhas.push(`<b>${escapar(t.solicitante)}</b> quer passar ${rotuloData(t.data)}`);
+      if (t.aceitante) linhas.push(`<b>${escapar(t.aceitante)}</b> assume`);
+    }
+
+    const acoes = [];
+    if (t.posso_aceitar) {
+      acoes.push(`<button class="btn btn-primario" onclick="responderTroca(${t.id},'aceitar')">Aceitar</button>`);
+    }
+    if (t.posso_aprovar) {
+      acoes.push(`<button class="btn btn-primario" onclick="responderTroca(${t.id},'aprovar')">Aprovar</button>`);
+      acoes.push(`<button class="btn" onclick="responderTroca(${t.id},'recusar')">Recusar</button>`);
+    }
+    if (t.sou_solicitante && (t.status === 'solicitada' || t.status === 'aceita')) {
+      acoes.push(`<button class="btn" onclick="responderTroca(${t.id},'recusar')">Cancelar</button>`);
+    }
+
+    return `<div class="troca">
+      <div class="troca-info">
+        <div class="troca-titulo">
+          ${t.tipo === 'permuta' ? 'Permuta' : 'Cessão'}
+          <span class="status-pill status-${t.status}">${t.status}</span>
+        </div>
+        <div class="troca-detalhe">${linhas.join('<br>')}</div>
+        ${t.motivo ? `<div class="troca-motivo">“${escapar(t.motivo)}”</div>` : ''}
+      </div>
+      <div class="troca-acoes">${acoes.join('')}</div>
+      ${t.resposta ? `<div class="troca-alerta">${escapar(t.resposta)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function carregarMeusPlantoes() {
+  // Só plantões futuros de escala publicada podem ser trocados.
+  const seletor = document.getElementById('troca-meu');
+  const hoje = new Date().toISOString().slice(0, 10);
+  const meus = [];
+  const outros = [];
+
+  for (let passo = 0; passo < 3; passo++) {
+    const d = new Date(ano, mes - 1 + passo, 1);
+    try {
+      const e = await chamar(`/escalas/${d.getFullYear()}/${d.getMonth() + 1}`);
+      if (e.status !== 'publicada') continue;
+      e.plantoes.forEach(p => {
+        if (p.data < hoje) return;
+        (p.bombeiro_id === meuId ? meus : outros).push(p);
+      });
+    } catch (err) { /* mês sem escala publicada */ }
+  }
+
+  seletor.innerHTML = meus.length
+    ? meus.map(p => `<option value="${p.id}" data-data="${p.data}">
+        ${rotuloData(p.data)} (${p.tipo})</option>`).join('')
+    : '<option value="">Você não tem plantões futuros publicados</option>';
+  window._outrosPlantoes = outros;
+  atualizarOpcoesTroca();
+}
+
+function atualizarOpcoesTroca() {
+  const seletor = document.getElementById('troca-quero');
+  const outros = window._outrosPlantoes || [];
+  const meu = document.getElementById('troca-meu').selectedOptions[0];
+  const mesDoMeu = meu && meu.dataset.data ? meu.dataset.data.slice(0, 7) : null;
+
+  seletor.innerHTML = '<option value="">Nada — só quero passar o meu (cessão)</option>'
+    + outros
+        .filter(p => !mesDoMeu || p.data.slice(0, 7) === mesDoMeu)
+        .map(p => `<option value="${p.id}">
+            ${rotuloData(p.data)} — ${escapar(p.bombeiro)}</option>`).join('');
+}
+
+async function pedirTroca() {
+  const erro = document.getElementById('erro-troca');
+  erro.classList.add('oculto');
+  const meu = document.getElementById('troca-meu').value;
+  if (!meu) {
+    erro.textContent = 'Você não tem plantões futuros disponíveis para troca.';
+    erro.classList.remove('oculto'); return;
+  }
+  const quero = document.getElementById('troca-quero').value;
+  try {
+    await chamar('/trocas', {
+      method: 'POST',
+      body: JSON.stringify({
+        plantao_id: parseInt(meu, 10),
+        plantao_oferecido_id: quero ? parseInt(quero, 10) : null,
+        motivo: document.getElementById('troca-motivo').value
+      })
+    });
+    document.getElementById('troca-motivo').value = '';
+    await carregarTrocas();
+    mostrar('ok', 'Pedido enviado',
+      quero ? 'A outra pessoa precisa aceitar, e depois o supervisor aprova.'
+            : 'Alguém precisa assumir, e depois o supervisor aprova.');
+  } catch (e) {
+    erro.textContent = e.corpo && typeof e.corpo.detail === 'string'
+      ? e.corpo.detail : 'Não foi possível enviar o pedido.';
+    erro.classList.remove('oculto');
+  }
+}
+
+async function responderTroca(id, acao) {
+  let resposta = '';
+  if (acao === 'recusar') {
+    const gerencia = papel === 'supervisor' || papel === 'administrador';
+    resposta = await perguntar({
+      titulo: gerencia ? 'Recusar pedido' : 'Cancelar pedido',
+      texto: gerencia
+        ? 'O pedido será encerrado e as pessoas envolvidas verão a resposta.'
+        : 'Seu pedido será encerrado. Você pode fazer outro depois.',
+      rotuloCampo: gerencia ? 'Motivo (aparece para quem pediu)' : null,
+      botao: gerencia ? 'Recusar' : 'Cancelar pedido',
+      perigo: true
+    });
+    if (resposta === null) return;
+  }
+  try {
+    const r = await chamar(`/trocas/${id}/${acao}`, {
+      method: 'POST',
+      body: acao === 'recusar' ? JSON.stringify({resposta}) : undefined
+    });
+    await carregarTrocas();
+    carregarPendencias();
+    if (acao === 'aprovar') {
+      await carregar();
+      mostrar('ok', 'Troca aprovada', 'A escala já foi atualizada.');
+    } else if (acao === 'aceitar') {
+      if (r.alerta && r.alerta.length) {
+        mostrar('alerta', 'Aceito, mas há um problema',
+          'O supervisor não vai conseguir aprovar assim:', r.alerta);
+      } else {
+        mostrar('ok', 'Pedido aceito', 'Falta a aprovação do supervisor.');
+      }
+    }
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  } catch (e) {
+    const d = e.corpo && e.corpo.detail;
+    if (d && d.violacoes) {
+      mostrar('erro', 'A troca não pode ser aprovada',
+        'Ela violaria regras obrigatórias:', d.violacoes);
+    } else {
+      mostrar('erro', 'Não foi possível concluir',
+        typeof d === 'string' ? d : '');
+    }
+    await carregarTrocas();
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  }
+}
+
+/* ============================================== AJUDA =================== */
+const AJUDA = {
+  inicio: {
+    titulo: 'Visão geral',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>O que este sistema faz</h3>
+      <p>Ele monta a escala de plantão do mês inteiro sozinho, respeitando
+      férias, licenças e o descanso obrigatório, e distribuindo os plantões de
+      forma equilibrada ao longo do tempo — não só dentro do mês.</p>
+      <p>O sistema <b>não substitui o supervisor</b>. Ele propõe, explica cada
+      decisão e permite ajustes antes da publicação. Quem aprova é sempre uma
+      pessoa.</p>
+
+      <h3>As abas do topo</h3>
+      <ul>
+        <li><b>Escala</b> — calendário, tabela e exportação do mês.</li>
+        <li><b>Datas</b> — os dias em que você não pode trabalhar e os que
+        prefere, e logo abaixo, na mesma página, as trocas de plantão. O número
+        ao lado da aba mostra quantas trocas esperam por você.</li>
+        <li><b>Configurações</b> — cadastro da equipe e parâmetros do motor
+        (só supervisor e administrador).</li>
+        <li><b>Relatórios</b> — números do ano e registro de alterações
+        (só supervisor e administrador).</li>
+      </ul>
+      <p>Em telas estreitas as abas rolam para o lado, sem esconder nada.</p>
+
+      <h3>Achar seus dias rápido</h3>
+      <p>Seus plantões aparecem com a etiqueta <b>MEU</b> no calendário e em
+      destaque na tabela. Na tabela há ainda o filtro <b>Só os meus</b>.</p>
+
+      <h3>O que as cores significam</h3>
+      <div class="legenda-cores">
+        <span><i style="background:var(--superficie-2)"></i> Branca — dia útil</span>
+        <span><i style="background:var(--vermelho-suave)"></i> Vermelha — fim de semana ou feriado</span>
+        <span><i style="background:var(--vermelho)"></i> Feriado</span>
+        <span><i style="background:var(--destaque)"></i> Seu plantão</span>
+        <span><i style="background:var(--hoje)"></i> Hoje</span>
+      </div>
+      <p>Navegue entre os meses pelas setas ao lado do nome do mês, no topo.</p>`
+  },
+
+  comoFunciona: {
+    titulo: 'Como a escala é montada',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>Não é sorteio, nem rodízio</h3>
+      <p>Um rodízio simples ("cada um pega um dia, na ordem da lista") quebra
+      no primeiro imprevisto: alguém entra de férias, e a fila inteira sai do
+      lugar. Sorteio distribui mal — pode dar três fins de semana seguidos para
+      a mesma pessoa.</p>
+      <p>O que este sistema faz é diferente: ele <b>testa combinações</b> até
+      achar a melhor que respeita tudo que precisa ser respeitado. Não é uma
+      regra fixa aplicada em ordem; é uma busca.</p>
+
+      <h3>Dois tipos de regra, e a diferença importa</h3>
+      <ul>
+        <li><b>As que nunca cedem</b> — todo dia precisa ter alguém; ninguém
+        trabalha de férias, licença ou atestado; ninguém emenda dois plantões
+        sem o descanso mínimo. Se não houver combinação que respeite todas, o
+        sistema <b>avisa que é impossível</b> em vez de inventar uma escala
+        ruim.</li>
+        <li><b>As que cedem quando não há jeito</b> — equilibrar a carga,
+        distribuir fins de semana, atender preferências. O motor busca o melhor
+        possível, mas essas abrem mão quando o contrário exigiria quebrar uma
+        regra do primeiro grupo.</li>
+      </ul>
+
+      <div class="ajuda-nota">
+        É por isso que o sistema às vezes diz "não há escala possível". Não é
+        defeito: é ele se recusando a entregar uma escala que parece certa e
+        não é. Uma escala inválida descoberta no dia 20 custa muito mais caro
+        que um aviso no dia 1º.
+      </div>
+
+      <h3>Por que a mesma entrada dá sempre o mesmo resultado</h3>
+      <p>O cálculo é determinístico: com os mesmos dados, o mês sai idêntico.
+      Isso permite conferir uma decisão antiga e explicar por que ela foi
+      tomada — coisa que um sorteio não permitiria.</p>`
+  },
+
+  criterios: {
+    titulo: 'A ordem dos critérios',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>Seis critérios, em fila</h3>
+      <p>Depois de garantir que todo dia tem alguém e que ninguém foi escalado
+      indevidamente, o motor otimiza nesta ordem:</p>
+      <ol>
+        <li><b>Espaçamento</b> — evitar plantões muito próximos, mesmo quando
+        o descanso mínimo já foi respeitado.</li>
+        <li><b>Carga total</b> — todo mundo com aproximadamente o mesmo número
+        de plantões, contando o histórico.</li>
+        <li><b>Escala branca</b> — dias úteis equilibrados.</li>
+        <li><b>Escala vermelha</b> — fins de semana e feriados equilibrados.</li>
+        <li><b>Sábados, domingos e feriados</b> — cada um separadamente, porque
+        pegar três domingos é diferente de pegar três sábados.</li>
+        <li><b>Preferências</b> — o que cada um pediu.</li>
+      </ol>
+
+      <h3>A fila é rígida de propósito</h3>
+      <p>Um critério só entra em cena <b>depois</b> que o anterior chegou ao
+      melhor resultado possível. Não é uma soma de pontos onde tudo se
+      compensa.</p>
+      <p>A diferença é grande. Num sistema de pontos, atender muitas
+      preferências poderia "compensar" alguém pegar dois fins de semana a mais
+      — e ninguém perceberia. Aqui isso não acontece: preferência é o último da
+      fila e só decide entre opções que já são igualmente boas em tudo antes.</p>
+
+      <div class="ajuda-nota">
+        Em resumo: <b>equilibrar sábados nunca passa na frente de respeitar
+        férias</b>, e nenhuma quantidade de preferências atendidas justifica
+        uma distribuição desigual.
+      </div>
+
+      <h3>Onde ver isso na prática</h3>
+      <p>O painel <b>Por quê?</b>, no topo da tela, mostra o resultado de cada
+      critério no mês que você está vendo — e o que cada um custou.</p>`
+  },
+
+  saldo: {
+    titulo: 'O saldo de equidade',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>O que o número significa</h3>
+      <p>É quanto a pessoa trabalhou <b>a mais ou a menos</b> do que seria a
+      parcela justa dela. Zero é estar em dia. Negativo é ter trabalhado
+      abaixo; positivo, acima.</p>
+      <p>Não é contagem de plantões: é a diferença entre o que a pessoa fez e o
+      que seria justo ela fazer.</p>
+
+      <h3>Por que "parcela justa" não é dividir por igual</h3>
+      <p>Se fosse simplesmente "total de dias dividido pelo número de
+      bombeiros", quem tirou trinta dias de férias apareceria devendo — e o
+      sistema o sobrecarregaria na volta para "empatar". Isso puniria alguém
+      por exercer um direito.</p>
+      <p>A parcela justa é calculada <b>proporcionalmente aos dias em que a
+      pessoa estava disponível</b>. Quem esteve fora metade do mês tem metade
+      da parcela. Voltar de férias deixa o saldo neutro, não negativo.</p>
+
+      <div class="ajuda-nota">
+        Consequência prática: <b>tirar férias não gera dívida</b>. Ninguém paga
+        depois pelo período em que esteve legitimamente fora.
+      </div>
+
+      <h3>Como ele influencia o mês seguinte</h3>
+      <p>O motor equilibra o saldo <b>acumulado</b>, não a contagem do mês
+      isolado. Quem entra o mês devendo tende a receber mais plantões; quem
+      entra credor, menos. É assim que a justiça acontece ao longo do tempo, e
+      não dentro de uma janela de trinta dias.</p>
+      <p>Um mês sozinho quase nunca fecha perfeitamente equilibrado — e não
+      precisa. O que importa é a soma.</p>
+
+      <h3>Categorias separadas</h3>
+      <p>O saldo é contado por tipo: total, branca, vermelha, sábado, domingo e
+      feriado. Alguém pode estar em dia no total e devendo em domingos. Por
+      isso o equilíbrio é buscado em cada categoria.</p>`
+  },
+
+  gerar: {
+    titulo: 'Gerar e publicar',
+    para: ['supervisor', 'administrador'],
+    html: `
+      <h3>Passo a passo</h3>
+      <ol>
+        <li>Escolha o mês pelas setas do topo.</li>
+        <li>Clique em <b>Gerar escala</b>. Leva um ou dois segundos.</li>
+        <li>Confira o calendário e a tabela. Clique em qualquer dia para ver
+        <b>por que</b> aquela pessoa foi escalada.</li>
+        <li>Ajuste o que quiser (veja "Ajustes e trocas").</li>
+        <li>Clique em <b>Publicar</b>.</li>
+      </ol>
+
+      <div class="ajuda-nota">
+        <b>Antes de publicar, só você vê a escala.</b> Ela fica como
+        <i>rascunho</i>: pode ser regerada ou descartada sem que ninguém se
+        planeje em cima dela. Os bombeiros só enxergam depois que você publica.
+      </div>
+
+      <h3>Regerar um mês já publicado</h3>
+      <p>Gerar de novo cria uma <b>versão nova</b>, também em rascunho. A versão
+      publicada continua valendo para a equipe até você publicar a nova. Nada é
+      sobrescrito: o histórico de versões fica registrado.</p>
+
+      <h3>Quando não há escala possível</h3>
+      <p>Com muita gente de férias ou de atestado ao mesmo tempo, pode não
+      existir combinação que respeite todas as regras obrigatórias. Nesse caso
+      o sistema <b>não inventa</b> uma escala inválida: ele avisa exatamente
+      quais condições estão em conflito, para você saber onde agir.</p>
+      <p>Três caminhos, do menos ao mais drástico:</p>
+      <ol>
+        <li><b>Rever as ausências</b> — talvez duas férias possam ser
+        remanejadas para semanas diferentes.</li>
+        <li><b>Reativar alguém</b> — um bombeiro inativo ou de outra equipe.</li>
+        <li><b>Autorizar uma exceção</b> — liberar uma pessoa, num dia, da
+        regra de descanso. Exige justificativa e fica no seu nome.</li>
+      </ol>
+
+      <h3>Recomeçar do zero</h3>
+      <p>O botão <b>Recomeçar</b> descarta o rascunho e tudo que você ajustou à
+      mão nele, deixando o motor livre para redistribuir sem travas. Diferente
+      de <b>Gerar escala</b>, que preserva os plantões travados.</p>
+      <p>Escala já publicada nunca é descartada — a equipe se planejou com ela.
+      Para trocá-la, gere uma versão nova e publique.</p>
+
+      <h3>Entender o mês inteiro</h3>
+      <p>O botão <b>Por quê?</b> abre o retrato das condições que existiam
+      quando o mês foi montado: quem estava fora e por quanto tempo, com que
+      saldo cada um entrou, quais preferências não deram e por quê, e quais
+      dias tiveram pouca gente disponível.</p>`
+  },
+
+  datas: {
+    titulo: 'Informar datas',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>Dias em que não posso trabalhar</h3>
+      <p>Férias, atestado, licença e afastamento. O sistema <b>nunca</b> escala
+      ninguém nesses dias — é regra obrigatória, não preferência.</p>
+      <ol>
+        <li>Escolha a data inicial e a final. Para um único dia, use a mesma
+        data nos dois campos.</li>
+        <li>Selecione o motivo.</li>
+        <li>Clique em <b>Adicionar</b>.</li>
+      </ol>
+      <p>Cada registro vira uma etiqueta na lista. O <b>×</b> remove.</p>
+
+      <div class="ajuda-nota">
+        <b>Férias não prejudicam seu saldo.</b> O cálculo é proporcional aos
+        dias em que você estava disponível, então voltar de férias não faz o
+        sistema te sobrecarregar para "compensar".
+      </div>
+
+      <h3>Dias que prefiro ou prefiro evitar</h3>
+      <p>Pode ser por dia da semana ("todo domingo") ou uma data específica.
+      Preferências são atendidas <b>sempre que possível</b>, mas cedem lugar ao
+      equilíbrio da escala — são o último critério do algoritmo.</p>
+
+      <h3>Privacidade</h3>
+      <p>Você só enxerga as suas datas. Nenhum colega vê o motivo da sua
+      ausência: a escala mostra apenas quem está de plantão.</p>`
+  },
+
+  entender: {
+    titulo: 'Entender a escala',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>Por que esta pessoa neste dia?</h3>
+      <p>Clique em qualquer dia do calendário. O sistema roda o cálculo de novo
+      <b>excluindo</b> aquela pessoa daquele dia e compara os resultados. A
+      resposta é uma destas três:</p>
+      <ul>
+        <li>Era a <b>única opção</b> que respeitava todas as regras obrigatórias.</li>
+        <li>Qualquer outra escolha <b>pioraria</b> algum critério — e ele diz qual.</li>
+        <li>Havia <b>alternativas equivalentes</b>; foi desempate.</li>
+      </ul>
+      <p>Nada disso é texto genérico: os números vêm do próprio cálculo.</p>
+
+      <h3>Extrato de uma pessoa</h3>
+      <p>Clique no nome de alguém no painel de saldo, ou na linha dele em
+      Relatórios. Abre o extrato do ano: quantos plantões pegou em cada
+      categoria, quanto foi a <b>média da equipe</b>, e o intervalo entre quem
+      pegou menos e quem pegou mais.</p>
+      <p>É a resposta para a pergunta que aparece em toda reunião — "por que eu
+      peguei três domingos e o colega nenhum?". Sozinho, o número não responde
+      nada; ao lado da média, responde.</p>
+
+      <h3>Saldo de equidade</h3>
+      <p>É a memória do sistema. Mostra quanto cada pessoa trabalhou <b>a mais
+      ou a menos</b> do que seria a parcela justa dela.</p>
+      <ul>
+        <li><b>Acima de zero</b> (laranja) — trabalhou além da parcela justa.</li>
+        <li><b>Abaixo de zero</b> (escuro) — trabalhou aquém.</li>
+      </ul>
+      <p>Quem está acima recebe menos plantões no mês seguinte, e vice-versa.
+      É assim que o equilíbrio acontece ao longo do tempo, e não só dentro de
+      um mês.</p>
+
+      <h3>Como o motor decidiu</h3>
+      <p>O painel da direita lista os critérios aplicados, em ordem de
+      prioridade. Cada um só é otimizado depois que o anterior chegou ao melhor
+      resultado possível — então "equilibrar sábados" nunca passa na frente de
+      "respeitar férias".</p>`
+  },
+
+  trocas: {
+    titulo: 'Trocar plantão',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>Como funciona</h3>
+      <p>Uma troca passa por três etapas, nesta ordem:</p>
+      <ol>
+        <li><b>Você pede</b> — escolhe um plantão seu e envia.</li>
+        <li><b>Alguém aceita</b> — outro bombeiro assume.</li>
+        <li><b>O supervisor aprova</b> — e só então a escala muda.</li>
+      </ol>
+
+      <h3>Dois tipos</h3>
+      <ul>
+        <li><b>Cessão</b> — você passa o seu dia e não recebe nada em troca.
+        Qualquer colega pode assumir.</li>
+        <li><b>Permuta</b> — você entrega um dia e fica com o de outra pessoa.
+        O pedido já sai endereçado a ela.</li>
+      </ul>
+
+      <div class="ajuda-nota">
+        <b>Aceitar não é o fim.</b> Mesmo com os dois de acordo, o sistema
+        confere na aprovação se a troca não quebra alguma regra obrigatória —
+        por exemplo, deixar alguém com dois plantões seguidos. Se quebrar, o
+        supervisor não consegue aprovar e ninguém fica com a escala errada.
+      </div>
+
+      <h3>O que pode ser trocado</h3>
+      <p>Apenas plantões de escala <b>já publicada</b> e que ainda <b>não
+      aconteceram</b>. Um plantão só pode ter um pedido em aberto por vez.</p>
+
+      <p>Você pode <b>cancelar</b> um pedido seu enquanto ele não for aprovado.</p>`
+  },
+
+  ajustes: {
+    titulo: 'Ajustes e imprevistos',
+    para: ['supervisor', 'administrador'],
+    html: `
+      <h3>Trocar quem está escalado num dia</h3>
+      <p>Clique no dia no calendário. O painel mostra quem está escalado, por
+      que foi escolhido, e a lista de quem poderia assumir — ordenada por quem
+      tem menos plantões. Quem está impedido aparece no fim, com o motivo:
+      férias, atestado, ou falta de descanso mínimo.</p>
+      <p>Um clique em <b>Escalar</b> troca a pessoa. O sistema pede um motivo,
+      que fica registrado no histórico de alterações.</p>
+      <p>Toda alteração é <b>validada antes</b> de ser aceita. Se a troca
+      violar uma regra obrigatória — pessoa de férias, dois plantões seguidos —
+      o sistema recusa e explica qual regra seria quebrada.</p>
+      <p>Um plantão ajustado manualmente fica <b>travado</b>: regerar o mês o
+      preserva.</p>
+
+      <h3>Atestado em cima da hora</h3>
+      <p>Registre a indisponibilidade normalmente, na aba de datas. Se o período
+      cobrir dias de uma escala já publicada, aparece um aviso listando
+      exatamente quais dias precisam ser remanejados.</p>
+
+      <div class="ajuda-nota atencao">
+        <b>O sistema nunca quebra uma regra obrigatória sozinho.</b> Ele prefere
+        avisar que não há solução a entregar uma escala inválida com aparência
+        de válida.
+      </div>`
+  },
+
+  equipe: {
+    titulo: 'Gerenciar a equipe',
+    para: ['supervisor', 'administrador'],
+    html: `
+      <h3>Cadastrar</h3>
+      <p>Preencha nome, e-mail e perfil. O sistema gera uma senha e mostra
+      <b>uma única vez</b> — copie e entregue à pessoa. Ela escolhe a própria
+      senha no primeiro acesso.</p>
+      <p>Supervisor cadastra bombeiros. Só o administrador cria outros
+      supervisores e administradores.</p>
+
+      <h3>As quatro ações de cada linha</h3>
+      <ul>
+        <li><b>Editar</b> — corrige nome, e-mail ou perfil.</li>
+        <li><b>Nova senha</b> — para quem esqueceu a dela. Gera uma temporária.</li>
+        <li><b>Desativar</b> — sai das próximas escalas, histórico preservado.</li>
+        <li><b>Excluir</b> — apaga de vez.</li>
+      </ul>
+
+      <div class="ajuda-nota atencao">
+        <b>Quem já trabalhou não pode ser excluído.</b> Apagar destruiria o
+        registro de quem cumpriu quais plantões, que é documento trabalhista.
+        Nesse caso use <b>Desativar</b>: a pessoa sai das próximas escalas e
+        todo o histórico continua íntegro.
+      </div>`
+  },
+
+  relatorios: {
+    titulo: 'Relatórios',
+    para: ['supervisor', 'administrador'],
+    html: `
+      <h3>Os números do ano</h3>
+      <p>Quantos plantões foram publicados, qual a taxa de preferências
+      atendidas, quantas trocas foram aprovadas e quantos ajustes você fez à
+      mão. Contam apenas escalas <b>publicadas</b> — rascunho pode ser
+      descartado.</p>
+
+      <h3>Plantões por bombeiro</h3>
+      <p>A distribuição do ano por pessoa, separada em branca, vermelha,
+      sábados, domingos e feriados. É o número que responde a "por que ele
+      pegou mais fim de semana que eu".</p>
+
+      <h3>Registro de alterações</h3>
+      <p>Tudo que muda fica gravado: quem alterou, quando, o que havia antes e
+      depois, e o motivo informado. Serve tanto para conferir uma decisão
+      antiga quanto para responder a questionamento.</p>`
+  },
+
+  exportar: {
+    titulo: 'Exportar',
+    para: ['bombeiro', 'supervisor', 'administrador'],
+    html: `
+      <h3>Três formatos</h3>
+      <ul>
+        <li><b>PDF</b> — pronto para imprimir e afixar no mural. Mês inteiro em
+        uma folha, com o total de plantões por pessoa no rodapé.</li>
+        <li><b>Excel</b> — planilha formatada, com uma segunda aba de resumo por
+        bombeiro.</li>
+        <li><b>CSV</b> — para levar os dados a outra ferramenta.</li>
+      </ul>
+      <p>Os três saem do servidor já formatados, com acentuação correta.</p>
+
+      <h3>Instalar como aplicativo</h3>
+      <p>Se aparecer a faixa no topo, clique em <b>Instalar</b>: o ícone vai
+      para a tela inicial e o sistema passa a abrir em tela cheia, sem barra de
+      navegador. No iPhone, use Compartilhar → "Adicionar à Tela de Início".</p>`
+  }
+};
+
+let ajudaAtual = 'inicio';
+
+function abrirAjuda(secao) {
+  ajudaAtual = secao || 'inicio';
+  document.getElementById('modal-ajuda').classList.remove('oculto');
+  desenharAjuda();
+}
+
+function fecharAjuda() {
+  document.getElementById('modal-ajuda').classList.add('oculto');
+}
+
+function desenharAjuda() {
+  const visiveis = Object.entries(AJUDA)
+    .filter(([, s]) => s.para.includes(papel || 'bombeiro'));
+  if (!visiveis.some(([id]) => id === ajudaAtual)) ajudaAtual = visiveis[0][0];
+
+  document.getElementById('ajuda-abas').innerHTML = visiveis.map(([id, s]) =>
+    `<button class="ajuda-aba ${id === ajudaAtual ? 'ativa' : ''}"
+             onclick="abrirAjuda('${id}')">${escapar(s.titulo)}</button>`).join('');
+  document.getElementById('ajuda-conteudo').innerHTML =
+    `<div class="ajuda-secao">${AJUDA[ajudaAtual].html}</div>`;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (_resolverConfirmacao) { responderConfirmacao(null); return; }
+  if (!document.getElementById('modal-dia').classList.contains('oculto')) {
+    fecharDia(); return;
+  }
+  if (!document.getElementById('modal-porque').classList.contains('oculto')) {
+    fecharPorque(); return;
+  }
+  if (!document.getElementById('modal-extrato').classList.contains('oculto')) {
+    fecharExtrato(); return;
+  }
+  fecharAjuda();
+});
+
+/* ====================================== APLICATIVO INSTALÁVEL (PWA) ====== */
+let promptInstalacao = null;
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // Sem service worker o sistema funciona normalmente pelo navegador;
+      // apenas não aparece o convite para instalar.
+    });
+  });
+}
+
+// O navegador dispara este evento quando considera o site instalável.
+window.addEventListener('beforeinstallprompt', (evento) => {
+  evento.preventDefault();
+  promptInstalacao = evento;
+  if (!sessionStorage) return;
+  const faixa = document.getElementById('faixa-instalar');
+  if (faixa && !window.matchMedia('(display-mode: standalone)').matches) {
+    faixa.classList.remove('oculto');
+  }
+});
+
+window.addEventListener('appinstalled', () => {
+  promptInstalacao = null;
+  document.getElementById('faixa-instalar').classList.add('oculto');
+});
+
+async function instalar() {
+  if (!promptInstalacao) {
+    mostrar('info', 'Como instalar',
+      'No Android: menu do Chrome (⋮) → "Instalar aplicativo". ' +
+      'No iPhone: botão Compartilhar → "Adicionar à Tela de Início". ' +
+      'No computador: ícone de instalação na barra de endereço.');
+    return;
+  }
+  promptInstalacao.prompt();
+  await promptInstalacao.userChoice;
+  promptInstalacao = null;
+  document.getElementById('faixa-instalar').classList.add('oculto');
+}
+
+function dispensarInstalacao() {
+  document.getElementById('faixa-instalar').classList.add('oculto');
+}
+
+document.getElementById('senha').addEventListener('keydown',
+  e => { if (e.key === 'Enter') entrar(); });
+
+// Ao abrir ou recarregar (F5), tenta continuar de onde parou.
+retomarSessao();
+document.getElementById('senha-conf').addEventListener('keydown',
+  e => { if (e.key === 'Enter') salvarSenha(); });
+</script>
+</body>
+</html>
